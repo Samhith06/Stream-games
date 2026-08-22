@@ -182,7 +182,7 @@
 </div>
 
 <script type="module">
-import { connect, money, signed, multiplier, countdown, escapeHtml } from '/app.js'
+import { connect, money, signed, multiplier, countdown, escapeHtml, slotTile } from '/app.js'
 
 const token = location.pathname.split('/').pop()
 const params = new URLSearchParams(location.search)
@@ -280,9 +280,7 @@ function renderQueue(entries) {
 
     return `
       <div class="entry ${banked ? '' : 'waiting'}">
-        ${e.thumbnail
-          ? `<img class="thumb" src="${escapeHtml(e.thumbnail)}" alt="">`
-          : '<div class="thumb" style="background:var(--border)"></div>'}
+        ${slotTile(e.slotName, e.thumbnail, 'thumb')}
         <div class="grow">
           <div class="entry-name truncate">${escapeHtml(e.slotName)}</div>
           <div class="entry-who truncate">@${escapeHtml(e.requestedBy)}</div>

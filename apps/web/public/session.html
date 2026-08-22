@@ -34,7 +34,7 @@
 <div id="dialog" class="hidden fixed inset-0 bg-background/80 backdrop-blur-sm z-50 items-center justify-center p-md"></div>
 
 <script type="module">
-import { api, control, connect, attempt, toast, money, signed, multiplier, countdown, copy, $, escapeHtml, requireSessionId } from './app.js'
+import { api, control, connect, attempt, toast, money, signed, multiplier, countdown, copy, $, escapeHtml, slotTile, requireSessionId } from './app.js'
 import { mountShell } from './shell.js'
 
 const sessionId = requireSessionId()
@@ -269,10 +269,7 @@ function entryRow(e, phase) {
   <tr class="hover:bg-surface-container-high transition-colors group ${e.status === 'opened' ? 'opacity-70' : ''}">
     <td class="p-sm">
       <div class="flex items-center gap-sm">
-        ${e.thumbnail
-          ? `<img src="${escapeHtml(e.thumbnail)}" class="w-10 h-10 rounded object-cover border border-outline-variant/40" alt="">`
-          : `<div class="w-10 h-10 rounded bg-surface-variant flex items-center justify-center">
-               <span class="material-symbols-outlined text-[18px] text-outline">casino</span></div>`}
+        ${slotTile(e.slotName, e.thumbnail, 'w-10 h-10 rounded object-cover border border-outline-variant/40 text-[13px]')}
         <div>
           <div class="font-bold text-on-surface">${escapeHtml(e.slotName)}</div>
           ${e.provider ? `<div class="text-[11px] text-on-surface-variant">${escapeHtml(e.provider)}</div>` : ''}

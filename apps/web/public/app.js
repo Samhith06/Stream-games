@@ -183,6 +183,55 @@ export const escapeHtml = (value) =>
 
 // ─── UI helpers ─────────────────────────────────────────────────────────────
 
+/**
+ * Stand-in artwork for a slot the catalog has no image for.
+ *
+ * The upstream catalog carries names, providers and RTP but no imagery, so most
+ * slots would otherwise be an identical grey square. On stream that is worse
+ * than it sounds: the queue becomes a column of blanks and a viewer cannot pick
+ * their own request out of it at a glance.
+ *
+ * The colour is derived from the name, so a slot looks the same every hunt and
+ * regulars start recognising them. Hue only — saturation and lightness are
+ * fixed, which keeps every tile legible against the dark surface and stops the
+ * generator producing something that fights the palette.
+ */
+export function slotArt(name) {
+  const text = String(name ?? '').trim() || '?'
+
+  // FNV-1a, same as the seeded RNG elsewhere: small, stable, well spread.
+  let hash = 0x811c9dc5
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i)
+    hash = Math.imul(hash, 0x01000193) >>> 0
+  }
+
+  // Connectors are skipped so "Fire in the Hole" reads FH rather than FI — but
+  // only when something is left, or "Hand of Anubis" would lose its H.
+  const CONNECTORS = new Set(['a', 'an', 'and', 'at', 'in', 'of', 'or', 'the', 'to', 'vs'])
+  const words = text.split(/[\s:'-]+/).filter((word) => /[a-z0-9]/i.test(word))
+  const meaningful = words.filter((word) => !CONNECTORS.has(word.toLowerCase()))
+
+  const initials = (meaningful.length > 0 ? meaningful : words)
+    .slice(0, 2)
+    .map((word) => word[0].toUpperCase())
+    .join('')
+
+  return { hue: hash % 360, initials: initials || text[0].toUpperCase() }
+}
+
+/** `slotArt` as a ready-made tile. `className` carries the size and shape. */
+export function slotTile(name, thumbnail, className) {
+  if (thumbnail) return `<img class="${className}" src="${escapeHtml(thumbnail)}" alt="">`
+
+  const { hue, initials } = slotArt(name)
+  return `<div class="${className}" style="
+      background: linear-gradient(140deg, hsl(${hue} 52% 34%), hsl(${(hue + 40) % 360} 52% 22%));
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 800; letter-spacing: .02em; color: hsl(${hue} 70% 88%);
+    ">${escapeHtml(initials)}</div>`
+}
+
 export const $ = (selector, root = document) => root.querySelector(selector)
 export const $$ = (selector, root = document) => [...root.querySelectorAll(selector)]
 
