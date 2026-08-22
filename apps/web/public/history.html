@@ -27,6 +27,14 @@
           <button data-r="profit" class="px-sm py-1 text-on-surface-variant rounded font-label-caps text-label-caps">PROFIT</button>
           <button data-r="loss" class="px-sm py-1 text-on-surface-variant rounded font-label-caps text-label-caps">LOSS</button>
         </div>
+        <!-- Clearing history belongs on the history page. It also lives in
+             Settings' danger zone, but nobody goes to Settings to tidy a list
+             they are looking at. -->
+        <button id="clear" class="hidden border border-outline-variant/40 text-on-surface-variant
+          hover:border-error hover:text-error px-sm py-xs rounded font-label-caps text-label-caps
+          uppercase transition-colors flex items-center gap-1" title="Delete every finished session">
+          <span class="material-symbols-outlined text-[16px]">delete_sweep</span> Clear
+        </button>
       </div>
     </header>
 
@@ -38,13 +46,30 @@
 </main>
 
 <script type="module">
-import { api, money, signed, escapeHtml, $ } from './app.js'
+import { api, money, signed, escapeHtml, attempt, toast, confirmAction, $ } from './app.js'
 import { mountShell, gameName } from './shell.js'
 
 const me = await mountShell({ active: '/history' })
 if (!me) throw new Error('unauthorized')
 
 const filters = { gameId: 'all', result: 'all' }
+let finished = 0
+
+$('#clear').addEventListener('click', async () => {
+  const ok = await confirmAction({
+    title: 'Clear session history?',
+    body: `This deletes ${finished} finished ${finished === 1 ? 'session' : 'sessions'} and every event `
+      + 'recorded for them. A session still running is left alone. This cannot be undone.',
+    confirmLabel: 'Delete',
+    destructive: true,
+  })
+  if (!ok) return
+
+  const result = await attempt(() => api('/api/settings/history', { method: 'DELETE' }))
+  toast(`Cleared ${result.deleted ?? 0} sessions`, 'success')
+  await load()
+})
+
 await load()
 
 $('#game').addEventListener('change', (e) => { filters.gameId = e.target.value; load() })
@@ -65,6 +90,12 @@ async function load() {
   const qs = new URLSearchParams({ gameId: filters.gameId, result: filters.result, limit: '50' })
   const { sessions, summary } = await api(`/api/sessions?${qs}`)
 
+  // Only offer to clear when there is something to clear, and only count the
+  // finished ones — a running session is not deleted and promising otherwise
+  // would misreport what the button is about to do.
+  finished = sessions.filter((s) => s.status !== 'running').length
+  $('#clear').classList.toggle('hidden', finished === 0)
+
   $('#summary').innerHTML = [
     ['list_alt', 'Total sessions', String(summary.totalSessions), null],
     ['track_changes', 'Bonus hunts', String(summary.totalHunts), null],
@@ -83,13 +114,19 @@ async function load() {
   $('#list').innerHTML = sessions.length === 0 ? empty() : sessions.map(card).join('')
 }
 
-const empty = () => `
+// A declaration, not a const arrow: load() runs at module evaluation and calls
+// this when the list comes back empty, which is before this line is reached.
+// As a const it sat in the temporal dead zone and a streamer with no sessions
+// got a thrown page instead of the empty state.
+function empty() {
+  return `
   <div class="flex flex-col items-center py-xl bg-surface-container rounded-xl border border-outline-variant/10 text-center">
     <span class="material-symbols-outlined text-[80px] text-outline-variant opacity-50">sports_esports</span>
     <h3 class="font-display-lg-mobile text-display-lg-mobile mt-md mb-sm">No sessions yet</h3>
     <p class="text-on-surface-variant max-w-md mb-lg">Run your first game and it will show up here.</p>
     <a href="/games" class="bg-primary text-on-primary font-bold px-lg py-sm rounded">Start a game</a>
   </div>`
+}
 
 function card(s) {
   const profit = s.profit

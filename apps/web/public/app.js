@@ -260,6 +260,56 @@ export function toast(message, kind = 'info') {
   setTimeout(() => el.remove(), kind === 'error' ? 6000 : 3500)
 }
 
+/**
+ * A confirmation the page draws itself, resolving true if the user goes ahead.
+ *
+ * Native confirm() is what this replaces: it is unstyled, it looks like a
+ * browser malfunction next to the rest of the app, and some browsers suppress
+ * it outright — which turns "are you sure?" into a destructive action that
+ * happens with no prompt at all.
+ */
+export function confirmAction({ title, body, confirmLabel = 'Confirm', destructive = false }) {
+  return new Promise((resolve) => {
+    const host = document.createElement('div')
+    host.className =
+      'fixed inset-0 z-[200] bg-black/70 backdrop-blur-sm flex items-center justify-center p-gutter'
+
+    const accent = destructive ? 'bg-error text-on-error' : 'bg-primary text-on-primary'
+    host.innerHTML = `
+      <div class="bg-surface-container rounded-xl border border-outline-variant shadow-xl max-w-md w-full
+                  p-xl relative overflow-hidden animate-[fadeIn_.15s_ease-out]">
+        <div class="absolute top-0 left-0 w-full h-1 ${destructive ? 'bg-error' : 'bg-primary'}"></div>
+        <h2 class="font-display-lg-mobile text-display-lg-mobile font-bold mb-sm">${escapeHtml(title)}</h2>
+        <p class="text-on-surface-variant mb-lg">${escapeHtml(body)}</p>
+        <div class="flex gap-md justify-end">
+          <button data-no class="px-md py-sm rounded-lg font-bold text-on-surface-variant
+            hover:bg-surface-variant transition-colors font-label-caps uppercase">Cancel</button>
+          <button data-yes class="${accent} px-md py-sm rounded-lg font-bold font-label-caps uppercase">
+            ${escapeHtml(confirmLabel)}</button>
+        </div>
+      </div>`
+
+    const close = (answer) => {
+      host.remove()
+      document.removeEventListener('keydown', onKey)
+      resolve(answer)
+    }
+    const onKey = (e) => {
+      if (e.key === 'Escape') close(false)
+      if (e.key === 'Enter') close(true)
+    }
+
+    host.querySelector('[data-no]').onclick = () => close(false)
+    host.querySelector('[data-yes]').onclick = () => close(true)
+    // Clicking the backdrop cancels; clicking the card must not.
+    host.onclick = (e) => { if (e.target === host) close(false) }
+    document.addEventListener('keydown', onKey)
+
+    document.body.appendChild(host)
+    host.querySelector('[data-no]').focus()
+  })
+}
+
 /** Wraps an action so a failure surfaces instead of vanishing into the console. */
 export async function attempt(fn, { success } = {}) {
   try {
