@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html class="dark" lang="en">
+<head>
+<meta charset="utf-8"/><meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Settings · StreamArena</title>
+<link href="/tailwind.css" rel="stylesheet"/>
+<script src="/theme.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&family=Sora:wght@600;700;800&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<style>
+  .input-dark { background:rgb(var(--surface-container-lowest)); border:1px solid rgb(var(--outline-variant)); color:rgb(var(--on-surface)); }
+  .input-dark:focus { border-color:rgb(var(--tertiary)); box-shadow:0 0 0 1px rgb(var(--tertiary)); outline:none; }
+</style>
+</head>
+<body class="bg-background text-on-surface font-body-md antialiased flex">
+<main class="flex-1 ml-64 min-h-screen">
+  <div class="p-lg max-w-[1100px] mx-auto grid grid-cols-12 gap-gutter">
+    <nav class="col-span-3 space-y-sm" id="tabs"></nav>
+    <div class="col-span-9 bg-surface-container rounded-xl border border-surface-bright p-lg" id="panel"></div>
+  </div>
+</main>
+
+<script type="module">
+import { api, attempt, toast, copy, escapeHtml, $ } from './app.js'
+import { mountShell } from './shell.js'
+
+const me = await mountShell({ active: '/settings' })
+if (!me) throw new Error('unauthorized')
+
+const TABS = [
+  ['account', 'Account', 'person'],
+  ['commands', 'Commands & bot', 'smart_toy'],
+  ['overlay', 'Overlay', 'layers'],
+  ['danger', 'Danger zone', 'warning'],
+]
+
+let current = 'account'
+renderTabs()
+show('account')
+
+function renderTabs() {
+  $('#tabs').innerHTML = TABS.map(([id, label, icon]) => `
+    <button data-tab="${id}" class="w-full text-left p-sm rounded-lg flex items-center gap-sm transition-colors
+      ${id === current
+        ? id === 'danger' ? 'text-error font-bold bg-error/10' : 'text-primary font-bold bg-primary/10'
+        : id === 'danger' ? 'text-error hover:bg-error/10' : 'text-on-surface-variant hover:bg-surface-bright/10'}">
+      <span class="material-symbols-outlined">${icon}</span>${label}
+    </button>`).join('')
+
+  for (const b of document.querySelectorAll('[data-tab]')) {
+    b.addEventListener('click', () => { current = b.dataset.tab; renderTabs(); show(current) })
+  }
+}
+
+async function show(tab) {
+  const panel = $('#panel')
+  if (tab === 'account') return account(panel)
+  if (tab === 'commands') return commands(panel)
+  if (tab === 'overlay') return overlay(panel)
+  if (tab === 'danger') return danger(panel)
+}
+
+function account(panel) {
+  panel.innerHTML = `
+    <h3 class="font-headline-md text-headline-md mb-xs">Kick connection</h3>
+    <p class="text-on-surface-variant mb-lg">The account StreamArena reads chat from and posts as.</p>
+
+    <div class="bg-surface p-lg rounded-lg border border-outline-variant/30 flex items-start gap-lg">
+      ${me.user.avatarUrl
+        ? `<img src="${escapeHtml(me.user.avatarUrl)}" class="w-24 h-24 rounded-full border-2 border-primary object-cover" alt="">`
+        : `<div class="w-24 h-24 rounded-full bg-surface-variant border-2 border-primary flex items-center
+             justify-center text-[28px] font-bold text-primary">${escapeHtml(me.user.displayName.slice(0,2).toUpperCase())}</div>`}
+      <div class="flex-1">
+        <div class="flex items-center gap-sm mb-xs">
+          <h4 class="text-[20px] font-bold">${escapeHtml(me.user.displayName)}</h4>
+          <span class="px-xs py-1 rounded-full font-data-mono text-[10px] flex items-center gap-1
+            ${me.kickConnected ? 'bg-primary/20 text-primary' : 'bg-error/20 text-error'}">
+            <span class="w-2 h-2 rounded-full ${me.kickConnected ? 'bg-primary' : 'bg-error'}"></span>
+            ${me.kickConnected ? 'Connected' : 'Disconnected'}
+          </span>
+        </div>
+        ${me.channel ? `<p class="text-on-surface-variant text-sm mb-sm font-data-mono">kick.com/${escapeHtml(me.channel.slug)}</p>` : ''}
+        <div class="flex flex-wrap gap-xs mb-md">
+          ${(me.scopes ?? []).map((s) => `<span class="bg-surface-bright text-on-surface-variant px-sm py-1 rounded text-xs font-data-mono">${escapeHtml(s)}</span>`).join('')}
+        </div>
+        <div class="flex gap-sm">
+          <a href="/auth/kick" class="bg-surface border border-outline-variant hover:border-primary px-md py-sm rounded-lg font-medium">Reconnect</a>
+          <button id="disconnect" class="border border-error/50 hover:bg-error/10 text-error px-md py-sm rounded-lg font-medium">Disconnect</button>
+        </div>
+      </div>
+    </div>`
+
+  $('#disconnect').addEventListener('click', async () => {
+    if (!confirm('Disconnect Kick? Games will stop working until you reconnect.')) return
+    await attempt(() => api('/auth/disconnect', { method: 'POST' }))
+    location.href = '/login'
+  })
+}
+
+async function commands(panel) {
+  panel.innerHTML = '<p class="text-on-surface-variant font-data-mono">Loading…</p>'
+  const gameId = 'bonus-hunt'
+  const data = await api(`/api/settings/${gameId}`)
+  const policy = { ...data.chatPolicy }
+  const keywords = {}
+
+  panel.innerHTML = `
+    <h3 class="font-headline-md text-headline-md mb-xs">Commands &amp; bot</h3>
+    <p class="text-on-surface-variant mb-lg">
+      Changes apply to your <strong>next</strong> session — viewers who learned a keyword mid-game shouldn't lose it.
+    </p>
+
+    <div class="space-y-md mb-lg">
+      ${data.commands.filter((c) => !c.operatorOnly).map((c) => `
+        <div class="flex items-center gap-md">
+          <div class="flex-1">
+            <label class="block font-label-caps text-label-caps text-on-surface-variant uppercase mb-xs">${escapeHtml(c.description)}</label>
+            <div class="flex items-center gap-xs bg-surface-container-lowest border border-outline-variant rounded px-sm">
+              <span class="font-data-mono text-secondary">!</span>
+              <input data-cmd="${escapeHtml(c.id)}" value="${escapeHtml(c.keywords[0] ?? '')}"
+                     class="bg-transparent border-none focus:ring-0 font-data-mono flex-1 py-sm px-0">
+            </div>
+            ${c.id === 'sr' ? `<p class="text-[12px] text-tertiary mt-xs">
+              Heads up — <span class="font-data-mono">!sr</span> is what most song-request bots use.
+              If you run one, pick something else.</p>` : ''}
+          </div>
+        </div>`).join('')}
+    </div>
+
+    <hr class="border-outline-variant my-lg">
+
+    <label class="block font-label-caps text-label-caps text-on-surface-variant uppercase mb-sm">Bot replies</label>
+    <div class="flex gap-xs bg-surface-container-lowest p-1 rounded-lg border border-outline-variant mb-sm">
+      ${[['off','Off'],['errors','Errors only'],['batched','Batched'],['all','Every request']].map(([v,t]) => `
+        <button data-ack="${v}" class="flex-1 py-xs rounded-md text-sm font-medium transition-colors
+          ${policy.ackMode === v ? 'bg-surface-variant text-on-surface' : 'text-on-surface-variant'}">${t}</button>`).join('')}
+    </div>
+    <p class="text-[12px] text-on-surface-variant/70 mb-lg leading-relaxed">
+      Errors only is the default. A successful request is already visible on the overlay, and acking 300 of them
+      would flood chat and hit Kick's rate limit — at which point acks start failing silently, which is worse.
+    </p>
+
+    <div class="grid grid-cols-2 gap-md">
+      <div class="flex items-center justify-between p-sm bg-surface-container-low rounded-lg border border-outline-variant/50">
+        <span>Announce winners</span>
+        <input type="checkbox" id="announce" ${policy.announceResults ? 'checked' : ''}
+               class="w-5 h-5 rounded border-outline-variant bg-surface-container-lowest text-primary">
+      </div>
+      <div>
+        <label class="block font-label-caps text-label-caps text-on-surface-variant uppercase mb-xs">Stream delay (seconds)</label>
+        <input id="delay" type="number" min="0" max="120" value="${Math.round((policy.streamDelayMs ?? 0) / 1000)}"
+               class="input-dark w-full rounded px-md py-sm font-data-mono">
+        <p class="text-[12px] text-on-surface-variant/70 mt-xs">
+          How far behind is your stream? We hold announcements this long so chat doesn't spoil your overlay.
+        </p>
+      </div>
+    </div>
+
+    <button id="save" class="mt-lg bg-primary text-on-primary font-bold px-lg py-sm rounded-lg">Save</button>`
+
+  for (const b of panel.querySelectorAll('[data-ack]')) {
+    b.addEventListener('click', () => {
+      policy.ackMode = b.dataset.ack
+      for (const other of panel.querySelectorAll('[data-ack]')) {
+        const on = other === b
+        other.className = `flex-1 py-xs rounded-md text-sm font-medium transition-colors ${
+          on ? 'bg-surface-variant text-on-surface' : 'text-on-surface-variant'}`
+      }
+    })
+  }
+
+  $('#save').addEventListener('click', async () => {
+    for (const input of panel.querySelectorAll('[data-cmd]')) {
+      const value = input.value.trim().replace(/^!/, '')
+      if (value) keywords[input.dataset.cmd] = [value]
+    }
+    await attempt(() => api(`/api/settings/${gameId}`, {
+      method: 'PUT',
+      body: {
+        commands: keywords,
+        chatPolicy: {
+          ...policy,
+          announceResults: $('#announce').checked,
+          streamDelayMs: Number($('#delay').value) * 1000,
+        },
+      },
+    }), { success: 'Saved — applies to your next session' })
+  })
+}
+
+function overlay(panel) {
+  const active = me.activeSession
+  panel.innerHTML = `
+    <h3 class="font-headline-md text-headline-md mb-xs">Overlay source</h3>
+    <p class="text-on-surface-variant mb-lg">Add this as a Browser Source in OBS at 1920×1080.</p>
+    ${active
+      ? `<label class="block font-data-mono text-label-caps text-on-surface-variant mb-xs">URL — KEEP THIS SECRET</label>
+         <div class="flex gap-sm">
+           <input id="url" readonly value="${escapeHtml(location.origin)}/overlay/…"
+                  class="flex-1 input-dark rounded px-sm py-sm font-data-mono text-sm">
+           <button id="reveal" class="bg-primary/20 text-primary hover:bg-primary hover:text-on-primary px-md rounded-lg">Reveal</button>
+           <button id="regen" class="bg-surface border border-outline-variant hover:border-error hover:text-error p-sm rounded-lg"
+                   title="Regenerate — invalidates the old URL">
+             <span class="material-symbols-outlined">refresh</span></button>
+         </div>
+         <p class="text-[12px] text-on-surface-variant/70 mt-sm">
+           Anyone with this URL can watch your session state. Regenerating revokes it without touching your Kick account.
+         </p>`
+      : `<p class="text-on-surface-variant">Overlay URLs are per session. Start a game and you'll get one.</p>`}`
+
+  if (!active) return
+
+  $('#reveal').addEventListener('click', async () => {
+    const detail = await api(`/api/sessions/${active.id}`)
+    $('#url').value = detail.overlayUrl
+    copy(detail.overlayUrl, 'Overlay URL copied')
+  })
+
+  $('#regen').addEventListener('click', async () => {
+    if (!confirm('Regenerate the overlay URL? OBS will need the new one.')) return
+    const { overlayUrl } = await attempt(() => api('/api/settings/overlay/regenerate', { method: 'POST' }),
+      { success: 'New URL generated' })
+    $('#url').value = overlayUrl
+  })
+}
+
+function danger(panel) {
+  panel.innerHTML = `
+    <h3 class="font-headline-md text-headline-md text-error mb-xs">Danger zone</h3>
+    <p class="text-on-surface-variant mb-lg">Irreversible. Read twice.</p>
+    <div class="border border-error/30 bg-error/5 rounded-lg p-lg space-y-lg">
+      <div class="flex justify-between items-center pb-md border-b border-error/20 gap-md">
+        <div>
+          <h4 class="font-bold">Clear session history</h4>
+          <p class="text-on-surface-variant text-sm mt-base">Deletes every finished session and its event log.</p>
+        </div>
+        <button id="clear" class="border border-error hover:bg-error hover:text-on-error text-error px-md py-sm rounded-lg font-medium whitespace-nowrap">
+          Clear history</button>
+      </div>
+      <div class="flex justify-between items-center gap-md">
+        <div>
+          <h4 class="font-bold">Delete account</h4>
+          <p class="text-on-surface-variant text-sm mt-base">Removes your account, channel, sessions and stored Kick tokens.</p>
+        </div>
+        <button id="nuke" class="bg-error hover:brightness-110 text-on-error px-md py-sm rounded-lg font-bold whitespace-nowrap">
+          Delete account</button>
+      </div>
+    </div>`
+
+  $('#clear').addEventListener('click', async () => {
+    if (!confirm('Delete every finished session? This cannot be undone.')) return
+    const r = await attempt(() => api('/api/settings/history', { method: 'DELETE' }))
+    toast(`Cleared ${r.deleted ?? 0} sessions`, 'success')
+  })
+
+  $('#nuke').addEventListener('click', async () => {
+    if (prompt('Type DELETE to confirm') !== 'DELETE') return
+    await attempt(() => api('/api/settings/account', { method: 'DELETE', body: { confirm: true } }))
+    location.href = '/login'
+  })
+}
+</script>
+</body>
+</html>

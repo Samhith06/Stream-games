@@ -1,0 +1,22 @@
+# Rebuilt inside the image — copying the host's would mix native binaries built
+# for a different platform into an Alpine image.
+node_modules
+**/node_modules
+dist
+**/dist
+*.tsbuildinfo
+**/*.tsbuildinfo
+
+# Secrets never belong in a layer. Production config arrives as environment
+# variables from the platform.
+.env
+.env.local
+.env.*.local
+
+.git
+.gitignore
+.sim-session
+Dockerfile
+.dockerignore
+docker-compose*.yml
+README.md

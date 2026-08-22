@@ -1,0 +1,16 @@
+{
+  "name": "@streamarena/db",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
+  "scripts": { "build": "tsc -b" },
+  "dependencies": {
+    "@streamarena/shared": "1.0.0",
+    "@streamarena/core": "1.0.0",
+    "drizzle-orm": "^0.38.3",
+    "postgres": "^3.4.5"
+  }
+}

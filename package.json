@@ -1,0 +1,48 @@
+{
+  "name": "streamarena",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "packages/shared",
+    "packages/core",
+    "packages/db",
+    "packages/kick",
+    "packages/catalog",
+    "packages/games/*",
+    "packages/platform",
+    "apps/web",
+    "apps/worker"
+  ],
+  "scripts": {
+    "build": "tsc -b && npm run build:css",
+    "clean": "tsc -b --clean",
+    "typecheck": "tsc -b",
+    "test": "node --test --experimental-strip-types \"packages/**/test/*.test.ts\" \"apps/**/test/*.test.ts\"",
+    "dev:web": "node --env-file-if-exists=.env --watch apps/web/dist/index.js",
+    "dev:worker": "node --env-file-if-exists=.env --watch apps/worker/dist/index.js",
+    "start:web": "node --env-file-if-exists=.env apps/web/dist/index.js",
+    "start:worker": "node --env-file-if-exists=.env apps/worker/dist/index.js",
+    "db:migrate": "node --env-file-if-exists=.env scripts/db.mjs migrate",
+    "db:seed": "node --env-file-if-exists=.env scripts/db.mjs seed",
+    "infra:up": "docker compose up -d",
+    "infra:down": "docker compose down",
+    "test:smoke": "node --env-file-if-exists=.env scripts/smoke.mjs",
+    "test:pipeline": "node --env-file-if-exists=.env scripts/pipeline-smoke.mjs",
+    "sim": "node --env-file-if-exists=.env scripts/sim.mjs",
+    "watch": "node scripts/watch.mjs",
+    "build:css": "tailwindcss -i apps/web/styles/app.css -o apps/web/public/tailwind.css --minify",
+    "dev:css": "tailwindcss -i apps/web/styles/app.css -o apps/web/public/tailwind.css --watch"
+  },
+  "devDependencies": {
+    "@tailwindcss/forms": "^0.5.11",
+    "@types/node": "^22.10.2",
+    "@types/ws": "^8.18.1",
+    "pino-pretty": "^13.1.3",
+    "tailwindcss": "^3.4.19",
+    "typescript": "^5.7.2"
+  }
+}

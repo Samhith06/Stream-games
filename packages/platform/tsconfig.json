@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "rootDir": "src", "outDir": "dist" },
+  "include": ["src/**/*.ts"],
+  "references": [
+    { "path": "../shared" },
+    { "path": "../core" },
+    { "path": "../db" },
+    { "path": "../kick" },
+    { "path": "../catalog" },
+    { "path": "../games/bonus-hunt" },
+    { "path": "../games/slot-tournament" }
+  ]
+}

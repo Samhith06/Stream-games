@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html class="dark" lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Set up · StreamArena</title>
+<link href="/tailwind.css" rel="stylesheet"/>
+<script src="/theme.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&family=Sora:wght@600;700;800&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<style>
+  .input-dark { background:rgb(var(--surface-container-lowest)); border:1px solid rgb(var(--outline-variant)); color:rgb(var(--on-surface)); transition:all .2s ease; }
+  .input-dark:focus { border-color:rgb(var(--tertiary)); box-shadow:0 0 0 1px rgb(var(--tertiary)), inset 0 0 8px rgb(var(--tertiary)/.2); outline:none; }
+  .card-glass { background:rgb(var(--surface-container)/.7); backdrop-filter:blur(12px); border:1px solid rgb(var(--outline-variant)); box-shadow:0 8px 32px rgba(0,0,0,.5); }
+  .seg:checked + label { background:rgb(var(--outline-variant)); color:rgb(var(--on-surface)); border-color:rgb(var(--outline)); }
+  input[type=range]{-webkit-appearance:none;width:100%;background:transparent}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;height:16px;width:16px;border-radius:50%;
+    background:rgb(var(--tertiary));cursor:pointer;margin-top:-6px;box-shadow:0 0 10px rgb(var(--tertiary))}
+  input[type=range]::-webkit-slider-runnable-track{width:100%;height:4px;background:rgb(var(--outline-variant));border-radius:2px}
+</style>
+</head>
+<body class="bg-background text-on-surface font-body-md antialiased flex">
+<main class="flex-1 ml-64 min-h-screen">
+  <div class="p-lg max-w-[1500px] mx-auto">
+    <header class="mb-xl flex items-end justify-between">
+      <div>
+        <h1 class="font-display-lg-mobile text-display-lg-mobile font-black" id="title">Setup</h1>
+        <p class="font-body-lg text-on-surface-variant mt-xs" id="subtitle">Configure your next session.</p>
+      </div>
+      <a href="/games" class="text-on-surface-variant hover:text-on-surface font-data-mono text-sm flex items-center gap-xs">
+        <span class="material-symbols-outlined text-[18px]">arrow_back</span> Back
+      </a>
+    </header>
+
+    <form id="form" class="grid grid-cols-1 lg:grid-cols-12 gap-xl">
+      <div class="lg:col-span-7 space-y-lg pb-xl" id="fields"></div>
+
+      <div class="lg:col-span-5">
+        <div class="sticky top-6 bg-surface-container-lowest border border-outline-variant rounded-xl p-lg shadow-xl">
+          <h3 class="font-headline-md text-headline-md mb-md">Summary</h3>
+          <ul class="space-y-sm text-sm border-b border-outline-variant pb-md mb-md" id="summary"></ul>
+
+          <p class="text-[13px] text-on-surface-variant leading-relaxed mb-md">
+            You'll get the OBS overlay URL as soon as the session starts.
+          </p>
+
+          <button type="submit" id="submit"
+            class="w-full bg-primary text-on-primary font-display-lg-mobile text-[22px] font-black py-md rounded-lg
+                   uppercase tracking-tight flex items-center justify-center gap-sm
+                   shadow-[0_0_15px_rgb(var(--primary)/.3)] hover:shadow-[0_0_25px_rgb(var(--primary)/.6)]
+                   transition-all disabled:opacity-40 disabled:cursor-not-allowed">
+            <span class="material-symbols-outlined text-[26px]" style="font-variation-settings:'FILL' 1">play_arrow</span>
+            <span id="submit-label">Start</span>
+          </button>
+        </div>
+      </div>
+    </form>
+  </div>
+</main>
+
+<script type="module">
+import { api, attempt, toast, $, escapeHtml } from './app.js'
+import { mountShell, gameName } from './shell.js'
+
+const gameId = new URLSearchParams(location.search).get('game') ?? 'bonus-hunt'
+const me = await mountShell({ active: '/games' })
+if (!me) throw new Error('unauthorized')
+
+// Tournaments wear the indigo palette, everything else purple. After the
+// shell, so its live-session guess doesn't win over the game we're setting up.
+setGameTheme(gameId)
+
+document.getElementById('title').textContent = `${gameName(gameId)} Setup`
+document.getElementById('submit-label').textContent =
+  gameId === 'bonus-hunt' ? 'Start Hunt' : 'Open Joining'
+
+const saved = await api(`/api/games/${gameId}/config`)
+const cfg = { ...saved.config }
+const policy = { ...saved.chatPolicy }
+
+const FIELDS = gameId === 'bonus-hunt' ? bonusHuntFields() : tournamentFields()
+render()
+
+function render() {
+  $('#fields').innerHTML = FIELDS.map(section).join('')
+  bind()
+  summarise()
+}
+
+// ─── field definitions ──────────────────────────────────────────────────────
+
+function bonusHuntFields() {
+  return [
+    { title: 'Hunt Profile', icon: 'account_balance_wallet', rows: [
+      { k: 'startBalance', label: 'Starting balance', type: 'money', half: true },
+      { k: 'targetBonuses', label: 'Target bonuses', type: 'int', half: true },
+      { k: 'defaultBet', label: 'Default bet size', type: 'money', half: true },
+      { k: 'currency', label: 'Currency', type: 'segment', half: true,
+        options: [['EUR','EUR'],['USD','USD'],['GBP','GBP']] },
+    ]},
+    { title: 'Viewer Participation', icon: 'group_add', accent: 'secondary', rows: [
+      { k: 'srGate', label: 'Who can add slots?', type: 'segment',
+        options: [['anyone','Anyone'],['followers','Followers'],['subscribers','Subs'],['moderators','Only me']] },
+      { k: 'oneEntryPerViewer', label: 'One slot per viewer for the whole hunt', type: 'toggle',
+        hint: 'Off (recommended): a viewer may request again once you have banked or dropped their last slot — better for smaller channels. On: one slot each, whatever happens.' },
+      { k: 'maxEntriesPerViewer', label: 'Slots a viewer may hold at once', type: 'stepper', half: true },
+      { k: 'requestCooldownMs', label: 'Cooldown between requests', type: 'seconds', half: true, max: 120 },
+    ]},
+    { title: 'Guess the Balance', icon: 'psychology', rows: [
+      { k: 'guessEnabled', label: 'Run Guess the Balance', type: 'toggle',
+        hint: 'Viewers guess the final balance once the list is locked. Turn off for a plain hunt.' },
+      { k: 'guessWindowMs', label: 'Guessing window', type: 'minutes', max: 10 },
+      { k: 'guessCeilingMultiple', label: 'Reject guesses above this multiple of the balance', type: 'int', half: true },
+    ]},
+    { title: 'Bot & Chat', icon: 'smart_toy', rows: chatRows() },
+  ]
+}
+
+function tournamentFields() {
+  return [
+    { title: 'Format', icon: 'view_comfy_alt', rows: [
+      { k: 'seats', label: 'Available seats', type: 'segment', options: [[8,'8'],[12,'12'],[16,'16']] },
+      { note: 'Winner is the higher multiplier — payout ÷ buy cost. €100 paying €425 is 4.25x, which beats €200 paying €610 at 3.05x.' },
+    ]},
+    { title: 'Joining', icon: 'group_add', accent: 'secondary', rows: [
+      { k: 'joinGate', label: 'Who can join?', type: 'segment',
+        options: [['anyone','Anyone'],['followers','Followers'],['subscribers','Subscribers']] },
+      { k: 'joinWindowMs', label: 'Joining window', type: 'minutes', max: 15, nullable: true,
+        nullLabel: 'No time limit (close it manually)' },
+      { note: 'Slots are unique — first come, first served. A viewer whose pick is already taken is told in chat so they can choose again.' },
+    ]},
+    { title: 'Predictions', icon: 'online_prediction', rows: [
+      { k: 'votingWindowMs', label: 'Voting window', type: 'seconds', max: 180 },
+      { k: 'announceDraw', label: 'Announce the bracket in chat', type: 'toggle' },
+    ]},
+    { title: 'Bot & Chat', icon: 'smart_toy', rows: chatRows() },
+  ]
+}
+
+function chatRows() {
+  return [
+    { k: 'ackMode', label: 'Bot replies', type: 'segment', policy: true,
+      options: [['off','Off'],['errors','Errors only'],['batched','Batched'],['all','Every request']],
+      hint: 'Errors only is the default. Success is already visible on the overlay, and acking 300 requests would flood chat and hit Kick\'s rate limit.' },
+    { k: 'announceResults', label: 'Announce winners in chat', type: 'toggle', policy: true },
+    { k: 'streamDelayMs', label: 'Stream delay', type: 'seconds', max: 60, policy: true,
+      hint: 'How many seconds behind is your stream? We hold chat announcements this long so they do not spoil your overlay reveal.' },
+  ]
+}
+
+// ─── rendering ──────────────────────────────────────────────────────────────
+
+function section(sec) {
+  return `
+  <section class="card-glass rounded-xl p-lg ${sec.accent === 'secondary' ? 'border-t-2 border-t-secondary/50' : ''}">
+    <div class="flex items-center gap-sm mb-lg border-b border-outline-variant pb-sm">
+      <span class="material-symbols-outlined text-primary">${sec.icon}</span>
+      <h2 class="font-headline-md text-headline-md">${sec.title}</h2>
+    </div>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-md">
+      ${sec.rows.map(row).join('')}
+    </div>
+  </section>`
+}
+
+function row(f) {
+  if (f.note) {
+    return `<div class="md:col-span-2 bg-surface-container border-l-4 border-primary rounded-r-lg p-sm
+                        text-[13px] text-on-surface-variant leading-relaxed">${escapeHtml(f.note)}</div>`
+  }
+
+  const value = f.policy ? policy[f.k] : cfg[f.k]
+  const span = f.half ? '' : 'md:col-span-2'
+  const hint = f.hint
+    ? `<p class="text-[12px] text-on-surface-variant/70 mt-xs leading-relaxed">${escapeHtml(f.hint)}</p>`
+    : ''
+  const label = `<label class="block font-label-caps text-label-caps text-on-surface-variant uppercase mb-xs">${escapeHtml(f.label)}</label>`
+
+  let field = ''
+  switch (f.type) {
+    case 'money':
+      field = `<input data-k="${f.k}" data-t="money" type="number" step="0.01" value="${value ?? 0}"
+                 class="input-dark w-full rounded px-md py-sm font-data-mono h-12">`
+      break
+    case 'int':
+      field = `<input data-k="${f.k}" data-t="int" type="number" value="${value ?? 0}"
+                 class="input-dark w-full rounded px-md py-sm font-data-mono h-12">`
+      break
+    case 'stepper':
+      field = `<div class="flex items-center">
+          <button type="button" data-step="-1" data-k="${f.k}" class="bg-surface-container-low border border-outline-variant
+            hover:border-secondary w-12 h-12 rounded-l flex items-center justify-center">
+            <span class="material-symbols-outlined">remove</span></button>
+          <input data-k="${f.k}" data-t="int" readonly value="${value ?? 1}"
+            class="input-dark w-full text-center h-12 rounded-none border-x-0 font-data-mono">
+          <button type="button" data-step="1" data-k="${f.k}" class="bg-surface-container-low border border-outline-variant
+            hover:border-secondary w-12 h-12 rounded-r flex items-center justify-center">
+            <span class="material-symbols-outlined">add</span></button>
+        </div>`
+      break
+    case 'seconds':
+    case 'minutes': {
+      const div = f.type === 'seconds' ? 1000 : 60000
+      const unit = f.type === 'seconds' ? 's' : 'm'
+      const isNull = value === null || value === undefined
+      const shown = isNull ? Math.round((f.max ?? 5) / 2) : Math.round(value / div)
+      field = `
+        <div class="flex justify-between items-center mb-xs">
+          <span></span><span class="font-data-mono text-secondary" data-out="${f.k}">${shown}${unit}</span>
+        </div>
+        <input data-k="${f.k}" data-t="${f.type}" data-div="${div}" data-unit="${unit}" type="range"
+               min="1" max="${f.max ?? 10}" value="${shown}" ${isNull ? 'disabled' : ''} class="w-full">
+        ${
+          f.nullable
+            ? `<label class="flex items-center gap-sm mt-sm cursor-pointer w-max">
+                 <input type="checkbox" data-null="${f.k}" ${isNull ? 'checked' : ''}
+                        class="w-5 h-5 rounded border-outline-variant bg-surface-container-lowest text-primary">
+                 <span class="text-sm">${escapeHtml(f.nullLabel)}</span>
+               </label>`
+            : ''
+        }`
+      break
+    }
+    case 'segment':
+      field = `<div class="flex flex-wrap gap-xs bg-surface-container-lowest p-1 rounded-lg border border-outline-variant">
+        ${f.options.map(([v, text], i) => `
+          <div class="flex-1">
+            <input class="hidden seg" type="radio" name="${f.k}" id="${f.k}-${i}"
+                   data-k="${f.k}" data-t="segment" value="${v}" ${String(value) === String(v) ? 'checked' : ''}>
+            <label for="${f.k}-${i}" class="block text-center py-xs px-sm rounded-md text-sm font-medium
+                   text-on-surface-variant hover:text-on-surface cursor-pointer transition-colors border border-transparent">
+              ${escapeHtml(text)}</label>
+          </div>`).join('')}
+      </div>`
+      break
+    case 'toggle':
+      return `<div class="${span}">
+        <div class="flex items-center justify-between p-sm bg-surface-container-low rounded-lg border border-outline-variant/50">
+          <span class="font-body-md">${escapeHtml(f.label)}</span>
+          <button type="button" role="switch" data-k="${f.k}" data-t="toggle" aria-checked="${Boolean(value)}"
+            class="relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors
+                   ${value ? 'bg-primary' : 'bg-surface-variant'}">
+            <span class="pointer-events-none inline-block h-5 w-5 rounded-full bg-surface-container-lowest shadow
+                         transition ${value ? 'translate-x-5' : 'translate-x-0'}"></span>
+          </button>
+        </div>${hint}</div>`
+  }
+
+  return `<div class="${span}">${label}${field}${hint}</div>`
+}
+
+// ─── binding ────────────────────────────────────────────────────────────────
+
+function set(key, value, isPolicy) {
+  if (isPolicy) policy[key] = value
+  else cfg[key] = value
+  summarise()
+}
+
+function isPolicyKey(k) {
+  return ['ackMode', 'announceResults', 'streamDelayMs'].includes(k)
+}
+
+function bind() {
+  for (const el of document.querySelectorAll('[data-k]')) {
+    const k = el.dataset.k
+    const t = el.dataset.t
+
+    if (t === 'toggle') {
+      el.addEventListener('click', () => {
+        const next = el.getAttribute('aria-checked') !== 'true'
+        el.setAttribute('aria-checked', String(next))
+        el.classList.toggle('bg-primary', next)
+        el.classList.toggle('bg-surface-variant', !next)
+        el.firstElementChild.classList.toggle('translate-x-5', next)
+        el.firstElementChild.classList.toggle('translate-x-0', !next)
+        set(k, next, isPolicyKey(k))
+      })
+    } else if (t === 'segment') {
+      el.addEventListener('change', () => {
+        const raw = el.value
+        set(k, /^\d+$/.test(raw) ? Number(raw) : raw, isPolicyKey(k))
+      })
+    } else if (t === 'seconds' || t === 'minutes') {
+      const div = Number(el.dataset.div)
+      el.addEventListener('input', () => {
+        document.querySelector(`[data-out="${k}"]`).textContent = el.value + el.dataset.unit
+        set(k, Number(el.value) * div, isPolicyKey(k))
+      })
+    } else if (t === 'money' || t === 'int') {
+      el.addEventListener('input', () => set(k, Number(el.value), isPolicyKey(k)))
+    }
+  }
+
+  for (const btn of document.querySelectorAll('[data-step]')) {
+    btn.addEventListener('click', () => {
+      const k = btn.dataset.k
+      const input = document.querySelector(`input[data-k="${k}"]`)
+      const next = Math.max(1, Math.min(10, Number(input.value) + Number(btn.dataset.step)))
+      input.value = next
+      set(k, next, false)
+    })
+  }
+
+  for (const box of document.querySelectorAll('[data-null]')) {
+    box.addEventListener('change', () => {
+      const k = box.dataset.null
+      const range = document.querySelector(`input[data-k="${k}"]`)
+      range.disabled = box.checked
+      set(k, box.checked ? null : Number(range.value) * Number(range.dataset.div), false)
+    })
+  }
+}
+
+function summarise() {
+  const rows = gameId === 'bonus-hunt'
+    ? [
+        ['Starting balance', `${cfg.currency ?? 'EUR'} ${(cfg.startBalance ?? 0).toLocaleString()}`],
+        ['Target', `${cfg.targetBonuses ?? 0} bonuses`],
+        ['Default bet', `${cfg.currency ?? 'EUR'} ${cfg.defaultBet ?? 0}`],
+        ['Who can add', label(cfg.srGate)],
+        ['Entry limit', cfg.oneEntryPerViewer
+          ? `${cfg.maxEntriesPerViewer} for the whole hunt`
+          : `${cfg.maxEntriesPerViewer} at a time`],
+        ['Guess the Balance', cfg.guessEnabled ? `On · ${Math.round((cfg.guessWindowMs ?? 0) / 60000)}m` : 'Off'],
+      ]
+    : [
+        ['Bracket', `${cfg.seats} seats`],
+        ['Who can join', label(cfg.joinGate)],
+        ['Joining', cfg.joinWindowMs === null ? 'Manual close' : `${Math.round(cfg.joinWindowMs / 60000)} minutes`],
+        ['Voting', `${Math.round((cfg.votingWindowMs ?? 0) / 1000)} seconds`],
+      ]
+
+  rows.push(['Bot replies', label(policy.ackMode)])
+  rows.push(['Stream delay', `${Math.round((policy.streamDelayMs ?? 0) / 1000)}s`])
+
+  $('#summary').innerHTML = rows.map(([k, v]) => `
+    <li class="flex justify-between items-center gap-md">
+      <span class="text-on-surface-variant">${escapeHtml(k)}</span>
+      <span class="font-data-mono text-on-surface text-right">${escapeHtml(v)}</span>
+    </li>`).join('')
+}
+
+// A declaration, not a const arrow: summarise() runs from the first render(),
+// which happens above this line.
+function label(v) {
+  return ({ anyone: 'Anyone', followers: 'Followers', subscribers: 'Subscribers',
+    moderators: 'Only me', off: 'Off', errors: 'Errors only', batched: 'Batched',
+    all: 'Every request' })[v] ?? v
+}
+
+// ─── submit ─────────────────────────────────────────────────────────────────
+
+$('#form').addEventListener('submit', async (event) => {
+  event.preventDefault()
+  const button = $('#submit')
+  button.disabled = true
+
+  try {
+    const session = await attempt(() =>
+      api('/api/sessions', { method: 'POST', body: { gameId, config: cfg, chatPolicy: policy } }),
+    )
+    // Creating and starting are separate so a crash between them leaves a
+    // session you can resume rather than a half-subscribed channel.
+    await attempt(() => api(`/api/sessions/${session.id}/start`, { method: 'POST' }))
+    location.href = `/session?id=${session.id}`
+  } catch (err) {
+    button.disabled = false
+    if (err.code === 'session_running') {
+      toast('A session is already running — end it first.', 'error')
+      setTimeout(() => (location.href = `/session?id=${err.details.sessionId}`), 1200)
+    }
+  }
+})
+</script>
+</body>
+</html>

@@ -1,0 +1,184 @@
+/*
+ * The one stylesheet the dashboard loads. Built by `npm run build:css` into
+ * apps/web/public/tailwind.css.
+ *
+ * Two palettes, one set of token names — Bonus Hunt and the dashboard shell in
+ * purple, tournaments in indigo. Markup only ever says `bg-primary`,
+ * `text-tertiary`, `border-outline-variant`; which palette answers is decided
+ * by one attribute on <html>, set by setGameTheme() in theme.js:
+ *
+ *     document.documentElement.dataset.game = 'slot-tournament'
+ *
+ * Values are bare RGB channels so Tailwind's opacity modifiers keep working —
+ * `bg-primary/20` compiles to `rgb(var(--primary) / 0.2)`.
+ *
+ * The semantic three never change between palettes: green is profit, red is
+ * loss, gold is best-or-notable. They mean the same thing in both games or they
+ * mean nothing (§18).
+ */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --primary: 168 85 247;
+    --primary-container: 126 63 191;
+    --primary-fixed: 216 180 254;
+    --primary-fixed-dim: 192 132 252;
+    --inverse-primary: 107 33 168;
+    --on-primary: 255 255 255;
+    --on-primary-container: 245 245 250;
+    --on-primary-fixed: 46 16 101;
+    --on-primary-fixed-variant: 91 33 182;
+    --secondary: 34 211 238;
+    --secondary-container: 14 116 144;
+    --secondary-fixed: 165 243 252;
+    --secondary-fixed-dim: 103 232 249;
+    --on-secondary: 5 53 63;
+    --on-secondary-container: 207 250 254;
+    --on-secondary-fixed: 4 47 53;
+    --on-secondary-fixed-variant: 14 116 144;
+    --tertiary: 250 204 21;
+    --tertiary-container: 202 154 4;
+    --tertiary-fixed: 253 230 138;
+    --tertiary-fixed-dim: 250 204 21;
+    --on-tertiary: 59 47 0;
+    --on-tertiary-container: 78 62 0;
+    --on-tertiary-fixed: 35 27 0;
+    --on-tertiary-fixed-variant: 87 69 0;
+    --background: 10 10 15;
+    --surface-container-lowest: 10 10 15;
+    --surface-container-low: 19 19 24;
+    --surface-container: 24 24 27;
+    --surface-container-high: 31 31 38;
+    --surface-container-highest: 39 39 46;
+    --surface-bright: 51 51 60;
+    --on-surface: 245 245 250;
+    --on-surface-variant: 154 154 176;
+    --outline: 106 106 128;
+    --outline-variant: 42 42 58;
+    --win: 34 232 143;
+    --loss: 255 77 106;
+    --gold: 255 197 61;
+    --error: 255 77 106;
+    --error-container: 127 29 46;
+    --on-error: 255 255 255;
+    --on-error-container: 255 218 214;
+    --surface: 10 10 15;
+    --surface-dim: 10 10 15;
+    --surface-variant: 39 39 46;
+    --surface-tint: 168 85 247;
+    --on-background: 245 245 250;
+    --inverse-surface: 245 245 250;
+    --inverse-on-surface: 31 31 38;
+    --info: 250 204 21;
+  }
+
+  [data-game="slot-tournament"] {
+    --primary: 99 102 241;
+    --primary-container: 79 70 229;
+    --primary-fixed: 199 210 254;
+    --primary-fixed-dim: 165 180 252;
+    --inverse-primary: 55 48 163;
+    --on-primary: 255 255 255;
+    --on-primary-container: 238 242 255;
+    --on-primary-fixed: 30 27 75;
+    --on-primary-fixed-variant: 55 48 163;
+    --secondary: 148 163 184;
+    --secondary-container: 71 85 105;
+    --secondary-fixed: 203 213 225;
+    --secondary-fixed-dim: 148 163 184;
+    --on-secondary: 15 23 42;
+    --on-secondary-container: 226 232 240;
+    --on-secondary-fixed: 15 23 42;
+    --on-secondary-fixed-variant: 51 65 85;
+    --tertiary: 56 189 248;
+    --tertiary-container: 2 132 199;
+    --tertiary-fixed: 186 230 253;
+    --tertiary-fixed-dim: 125 211 252;
+    --on-tertiary: 8 47 73;
+    --on-tertiary-container: 224 242 254;
+    --on-tertiary-fixed: 8 47 73;
+    --on-tertiary-fixed-variant: 7 89 133;
+    --background: 11 17 32;
+    --surface-container-lowest: 8 13 24;
+    --surface-container-low: 15 23 42;
+    --surface-container: 22 32 58;
+    --surface-container-high: 30 41 59;
+    --surface-container-highest: 41 53 72;
+    --surface-bright: 51 65 85;
+    --on-surface: 241 245 249;
+    --on-surface-variant: 148 163 184;
+    --outline: 100 116 139;
+    --outline-variant: 41 53 72;
+    --win: 34 232 143;
+    --loss: 255 77 106;
+    --gold: 255 197 61;
+    --error: 255 77 106;
+    --error-container: 127 29 46;
+    --on-error: 255 255 255;
+    --on-error-container: 255 218 214;
+    --surface: 11 17 32;
+    --surface-dim: 11 17 32;
+    --surface-variant: 41 53 72;
+    --surface-tint: 99 102 241;
+    --on-background: 241 245 249;
+    --inverse-surface: 241 245 249;
+    --inverse-on-surface: 30 41 59;
+    --info: 56 189 248;
+  }
+}
+
+@layer base {
+  /* §18 — figures must not jitter as they tick. */
+  .font-data-mono,
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: rgb(var(--surface-container-lowest));
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgb(var(--outline-variant));
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgb(var(--outline));
+  }
+}
+
+@layer utilities {
+  /* Referenced from JS as arbitrary animation values, e.g. the toast in
+     app.js uses `animate-[fadeIn_.15s_ease-out]`. */
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  @keyframes breathing {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.35;
+    }
+  }
+
+  .live-dot {
+    animation: breathing 2s ease-in-out infinite;
+  }
+}

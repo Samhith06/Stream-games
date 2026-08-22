@@ -1,0 +1,91 @@
+# The whole stack from the built image — for self-hosting on a single box, and
+# for checking a release locally before it goes anywhere.
+#
+#   cp .env.example .env.prod   # then fill it in properly
+#   docker compose -f docker-compose.prod.yml up --build
+#
+# `docker-compose.yml` is the other file: datastores only, for `npm run dev:*`
+# against your working tree.
+
+# A project name of its own, so the volumes are `streamarena-prod_pgdata` rather
+# than colliding with the dev stack's. Postgres only honours POSTGRES_PASSWORD
+# when it initialises an empty data directory, so sharing a volume with
+# docker-compose.yml means quietly running against the development database with
+# the development password.
+name: streamarena-prod
+
+x-app: &app
+  build:
+    context: .
+  image: streamarena:latest
+  env_file: [.env.prod]
+  environment:
+    # Inside the compose network the datastores are reachable by service name,
+    # which is never what .env.prod holds — that file describes the host.
+    DATABASE_URL: postgres://streamarena:${POSTGRES_PASSWORD:-streamarena}@postgres:5432/streamarena
+    REDIS_URL: redis://redis:6379
+  depends_on:
+    postgres: { condition: service_healthy }
+    redis: { condition: service_healthy }
+    migrate: { condition: service_completed_successfully }
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: streamarena
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-streamarena}
+      POSTGRES_DB: streamarena
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U streamarena"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    # appendonly matters here in a way it doesn't locally: Redis holds the
+    # BullMQ queues and the live projections, so a hard restart without it
+    # drops in-flight chat commands.
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # Runs to completion before web or worker starts. Migrations are plain SQL
+  # applied in filename order and recorded in schema_migrations, so re-running
+  # this on every deploy is a no-op once they are applied.
+  migrate:
+    <<: *app
+    depends_on:
+      postgres: { condition: service_healthy }
+    command: ["node", "scripts/db.mjs", "migrate"]
+    restart: "no"
+
+  web:
+    <<: *app
+    command: ["node", "apps/web/dist/index.js"]
+    ports: ["${WEB_HOST_PORT:-3000}:3000"]
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3000/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  worker:
+    <<: *app
+    command: ["node", "apps/worker/dist/index.js"]
+
+volumes:
+  pgdata:
+  redisdata:

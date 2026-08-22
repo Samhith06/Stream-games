@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html class="dark" lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Sign in · StreamArena</title>
+<link href="/tailwind.css" rel="stylesheet"/>
+<script src="/theme.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&family=Sora:wght@600;700;800&display=swap" rel="stylesheet"/>
+<style>
+  .glow-button { box-shadow: 0 0 15px rgba(83,252,24,.25); transition: all .2s ease-in-out; }
+  .glow-button:hover { box-shadow: 0 0 25px rgba(83,252,24,.45); transform: translateY(-1px); }
+  .bg-grid { background-size: 40px 40px;
+    background-image: linear-gradient(to right, rgba(255,255,255,.03) 1px, transparent 1px),
+                      linear-gradient(to bottom, rgba(255,255,255,.03) 1px, transparent 1px); }
+  .radial-glow { background: radial-gradient(circle at center, rgb(var(--primary)/.15) 0%, transparent 50%); }
+</style>
+</head>
+<body class="bg-background text-on-surface min-h-screen flex flex-col items-center justify-center relative overflow-hidden font-body-md antialiased">
+  <div class="absolute inset-0 bg-grid z-0"></div>
+  <div class="absolute inset-0 radial-glow z-0"></div>
+
+  <main class="w-full max-w-[420px] px-gutter relative z-10 flex flex-col items-center">
+    <div class="w-full bg-surface-container-low/40 backdrop-blur-xl border border-outline-variant rounded-xl p-lg shadow-2xl flex flex-col items-center text-center">
+      <div class="mb-xl flex flex-col items-center">
+        <h1 class="font-display-lg text-display-lg tracking-tighter">
+          <span class="text-on-surface">STREAM</span><span class="text-primary">ARENA</span>
+        </h1>
+        <p class="font-body-md text-on-surface-variant mt-sm">Interactive games for Kick streamers</p>
+      </div>
+
+      <div id="error" class="hidden w-full mb-md p-sm rounded-lg bg-error-container/30 border border-error/40 text-error text-sm"></div>
+
+      <a href="/auth/kick" id="signin"
+         class="w-full h-[48px] bg-[#53FC18] text-background font-body-lg font-bold rounded-lg
+                flex items-center justify-center gap-sm glow-button relative overflow-hidden group">
+        <div class="absolute inset-0 bg-white/20 opacity-0 group-hover:opacity-100 transition-opacity"></div>
+        <svg class="z-10" fill="none" height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+          <path d="M4 2H10V6H14V2H20V22H14V18H10V22H4V2Z" fill="currentColor"></path>
+        </svg>
+        <span class="z-10 relative">Continue with Kick</span>
+      </a>
+
+      <div class="mt-md px-sm">
+        <p class="font-body-md text-[13px] leading-relaxed text-on-surface-variant/70">
+          We'll ask for permission to read your chat and post messages. You can revoke access anytime.
+        </p>
+      </div>
+    </div>
+
+    <footer class="mt-xl flex items-center justify-center gap-sm font-data-mono text-data-mono text-on-surface-variant/50">
+      <a class="hover:text-primary transition-colors" href="#">Terms</a><span>·</span>
+      <a class="hover:text-primary transition-colors" href="#">Privacy</a><span>·</span>
+      <a class="hover:text-primary transition-colors" href="#">Docs</a>
+    </footer>
+  </main>
+
+<script type="module">
+  // Kick bounces OAuth failures back here with ?error=
+  const error = new URLSearchParams(location.search).get('error')
+  if (error) {
+    const box = document.getElementById('error')
+    box.textContent = `Kick refused the sign-in: ${error}`
+    box.classList.remove('hidden')
+  }
+
+  // Already signed in? Skip straight through.
+  fetch('/api/me', { credentials: 'same-origin' })
+    .then((r) => { if (r.ok) location.href = '/games' })
+    .catch(() => {})
+</script>
+</body>
+</html>

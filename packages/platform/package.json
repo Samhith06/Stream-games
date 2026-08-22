@@ -1,0 +1,23 @@
+{
+  "name": "@streamarena/platform",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
+  "scripts": { "build": "tsc -b" },
+  "dependencies": {
+    "@streamarena/shared": "1.0.0",
+    "@streamarena/core": "1.0.0",
+    "@streamarena/db": "1.0.0",
+    "@streamarena/kick": "1.0.0",
+    "@streamarena/catalog": "1.0.0",
+    "@streamarena/game-bonus-hunt": "1.0.0",
+    "@streamarena/game-slot-tournament": "1.0.0",
+    "bullmq": "^5.34.6",
+    "ioredis": "^5.4.2",
+    "pino": "^9.6.0",
+    "zod": "^3.24.1"
+  }
+}

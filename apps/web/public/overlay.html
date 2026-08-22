@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>StreamArena Overlay</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700&family=JetBrains+Mono:wght@500;700&family=Sora:wght@700;800&display=swap" rel="stylesheet"/>
+<style>
+  /*
+   * §19 — a different design problem from the dashboard.
+   *
+   *   - background fully transparent; never set a page colour
+   *   - fixed 1920x1080 canvas, no scrolling, no breakpoints
+   *   - no text under 20px, no weight under 500, no borders under 2px
+   *   - panels sit on rgba(19,19,28,.88) with blur; never fully opaque or clear
+   *   - keep the centre free; the game and facecam live there
+   *   - animate only when data changes — no idle loops except one LIVE dot
+   */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body {
+    width: 1920px; height: 1080px;
+    background: transparent;          /* OBS composites over the stream */
+    overflow: hidden;
+    font-family: Inter, sans-serif;
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /*
+   * Same two palettes as the dashboard (see theme.js), inlined because the
+   * overlay ships no build step and no Tailwind — OBS loads this file cold.
+   * `--accent` is whichever hue carries highlights in the active palette: cyan
+   * for Bonus Hunt, sky blue for tournaments. It is deliberately NOT gold; gold
+   * means best-or-notable and has to stay unambiguous.
+   */
+  :root {
+    --panel: rgba(19, 19, 28, .88);
+    --border: #2A2A3A;
+    --primary: #A855F7;
+    --accent: #22D3EE;
+    --accent-soft: rgba(34, 211, 238, .10);
+    --muted: #9A9AB0;
+    --track: rgba(53, 52, 56, .9);
+    --text: #F5F5FA;
+
+    /* Meaning, not decoration — identical across palettes. */
+    --gold: #FFC53D;
+    --win: #22E88F;
+    --loss: #FF4D6A;
+  }
+
+  [data-game="slot-tournament"] {
+    --panel: rgba(11, 17, 32, .88);
+    --border: #293548;
+    --primary: #6366F1;
+    --accent: #38BDF8;
+    --accent-soft: rgba(56, 189, 248, .10);
+    --muted: #94A3B8;
+    --track: rgba(41, 53, 72, .9);
+    --text: var(--text);
+  }
+
+  .panel {
+    background: var(--panel);
+    backdrop-filter: blur(12px);
+    border: 2px solid var(--border);
+    border-radius: 16px;
+  }
+
+  .mono { font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; }
+  .display { font-family: Sora, sans-serif; font-weight: 800; letter-spacing: -.02em; }
+  .label { font-family: 'JetBrains Mono', monospace; font-size: 20px; font-weight: 700;
+           text-transform: uppercase; letter-spacing: .12em; color: var(--muted); }
+
+  #stage { position: relative; width: 1920px; height: 1080px; }
+  .left  { position: absolute; left: 48px; top: 120px; width: 470px; }
+  .right { position: absolute; right: 48px; top: 120px; width: 470px; }
+  .bottom{ position: absolute; left: 48px; right: 48px; bottom: 48px; }
+
+  /* Panels only animate when their data changes. */
+  @keyframes slideIn { from { opacity: 0; transform: translateY(-12px); } to { opacity: 1; transform: none; } }
+  .enter { animation: slideIn .25s cubic-bezier(.16,1,.3,1); }
+
+  @keyframes glowPulse {
+    0%   { box-shadow: 0 0 0 0 rgba(255,197,61,.7); }
+    70%  { box-shadow: 0 0 0 28px rgba(255,197,61,0); }
+    100% { box-shadow: 0 0 0 0 rgba(255,197,61,0); }
+  }
+  .celebrate { animation: glowPulse 1.4s ease-out 2; }
+
+  /* The single permitted infinite loop (§19). */
+  @keyframes breathe { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+  .live-dot { width: 14px; height: 14px; border-radius: 50%; background: var(--loss); animation: breathe 2s ease-in-out infinite; }
+
+  .row { display: flex; align-items: center; gap: 16px; padding: 14px 18px;
+         border-bottom: 2px solid var(--border); font-size: 22px; font-weight: 600; }
+  .row:last-child { border-bottom: none; }
+  .thumb { width: 52px; height: 52px; border-radius: 8px; object-fit: cover; border: 2px solid var(--border); flex-shrink: 0; }
+  .grow { flex: 1; min-width: 0; }
+  .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .hidden { display: none !important; }
+
+  /* Takeover for the result reveal and the between-rounds bracket. */
+  #takeover { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+              background: var(--panel); backdrop-filter: blur(20px); }
+</style>
+</head>
+<body>
+<div id="stage">
+  <!-- Status strip, top-left. Small, out of the way, always truthful. -->
+  <div class="panel enter" style="position:absolute;left:48px;top:40px;display:flex;align-items:center;gap:16px;padding:12px 22px;">
+    <div class="live-dot" id="dot"></div>
+    <span class="label" id="phase" style="color:var(--text)">Connecting</span>
+    <span class="mono" id="participants" style="font-size:22px;font-weight:700;color:var(--accent)"></span>
+  </div>
+
+  <div class="left"  id="left"></div>
+  <div class="right" id="right"></div>
+  <div class="bottom" id="bottom"></div>
+  <div id="takeover" class="hidden"></div>
+</div>
+
+<script type="module">
+import { connect, money, signed, multiplier, countdown, escapeHtml } from '/app.js'
+
+const token = location.pathname.split('/').pop()
+const params = new URLSearchParams(location.search)
+const currency = params.get('currency') ?? 'EUR'
+
+let state = {}
+let gameId = null
+
+const el = (id) => document.getElementById(id)
+
+connect({
+  url: `${location.origin.replace(/^http/, 'ws')}/ws/overlay/${token}`,
+  onState: (next, frame) => {
+    gameId = frame.gameId ?? gameId
+    if (gameId === 'slot-tournament') document.documentElement.dataset.game = gameId
+    state = next
+    render()
+  },
+  onCue: cue,
+  onStatus: (status) => {
+    el('dot').style.background = status === 'connected' ? 'var(--loss)' : 'var(--muted)'
+    if (status === 'ended') el('phase').textContent = 'Complete'
+  },
+})
+
+function render() {
+  el('phase').textContent = String(state.phase ?? '').toUpperCase() || 'WAITING'
+  const people = state.participantCount ?? state.poolCount
+  el('participants').textContent = people ? `${people.toLocaleString()} playing` : ''
+
+  if (gameId === 'slot-tournament') return renderTournament()
+  renderHunt()
+}
+
+// ─── Bonus Hunt ─────────────────────────────────────────────────────────────
+
+function renderHunt() {
+  const phase = state.phase
+  const banked = state.collectedCount ?? 0
+  const target = state.targetBonuses ?? 0
+
+  // §13 — break-even is the emotional centre of the game and should be the
+  // largest number on the overlay during collection and guessing.
+  el('left').innerHTML = `
+    ${stat('Starting balance', money(state.startBalance, currency), 'var(--text)', 40)}
+    ${phase === 'collecting' || phase === 'guessing'
+      ? stat('Break-even per bonus', money(state.breakEvenPerBonus, currency), 'var(--gold)', 64)
+      : stat('Total won', money(state.won, currency), 'var(--primary)', 56)}
+    ${phase === 'opening' || phase === 'complete'
+      ? stat('Profit / loss', signed(state.profit ?? 0, currency),
+             (state.profit ?? 0) >= 0 ? 'var(--win)' : 'var(--loss)', 48)
+      : ''}`
+
+  if (phase === 'guessing') {
+    el('right').innerHTML = `
+      <div class="panel enter" style="padding:28px;text-align:center;">
+        <div class="label" style="margin-bottom:12px">Guess the balance</div>
+        <div class="display mono" id="countdown" style="font-size:82px;color:var(--primary);line-height:1">—</div>
+        <div style="font-size:24px;font-weight:600;margin-top:16px;color:var(--muted)">
+          Type <span class="mono" style="color:var(--accent)">!guess &lt;amount&gt;</span> in chat
+        </div>
+        <div class="mono" style="font-size:28px;font-weight:700;margin-top:18px">
+          ${(state.guessCount ?? 0).toLocaleString()} guesses in
+        </div>
+      </div>`
+  } else if (phase === 'opening' || phase === 'complete') {
+    // §20 — the guess leaderboard during opening: the five closest to the
+    // running total. The streamer's narration fuel for the whole phase.
+    const closest = state.closestGuesses ?? []
+    el('right').innerHTML = closest.length === 0 ? '' : `
+      <div class="panel enter" style="overflow:hidden">
+        <div class="label" style="padding:18px 18px 10px">Closest guesses</div>
+        ${closest.map((g, i) => `
+          <div class="row" ${i === 0 ? 'style="background:var(--accent-soft)"' : ''}>
+            <span class="mono" style="width:34px;color:${i === 0 ? 'var(--accent)' : 'var(--muted)'}">${i + 1}</span>
+            <span class="grow truncate">${escapeHtml(g.username)}</span>
+            <span class="mono" style="color:${i === 0 ? 'var(--accent)' : 'var(--text)'}">${money(g.amount, currency)}</span>
+          </div>`).join('')}
+      </div>`
+  } else {
+    const entries = (state.entries ?? []).slice(-7).reverse()
+    el('right').innerHTML = entries.length === 0 ? '' : `
+      <div class="panel enter" style="overflow:hidden">
+        <div class="label" style="padding:18px 18px 10px">Latest slots</div>
+        ${entries.map((e) => `
+          <div class="row">
+            ${e.thumbnail ? `<img class="thumb" src="${escapeHtml(e.thumbnail)}" alt="">`
+              : '<div class="thumb" style="background:var(--border)"></div>'}
+            <div class="grow" style="min-width:0">
+              <div class="truncate">${escapeHtml(e.slotName)}</div>
+              <div class="mono truncate" style="font-size:20px;font-weight:500;color:var(--muted)">
+                ${escapeHtml(e.requestedBy)}</div>
+            </div>
+            ${e.status === 'collected' || e.status === 'opened'
+              ? '<span style="color:var(--win);font-size:26px">✓</span>' : ''}
+          </div>`).join('')}
+      </div>`
+  }
+
+  el('bottom').innerHTML = `
+    <div class="panel" style="display:flex;align-items:center;justify-content:space-between;padding:24px 36px;">
+      <div style="display:flex;align-items:center;gap:36px;flex:1">
+        <div>
+          <div class="label" style="margin-bottom:8px">Bonuses banked</div>
+          <div style="display:flex;align-items:baseline;gap:10px">
+            <span class="display" style="font-size:52px;color:var(--primary)">${banked}</span>
+            <span class="mono" style="font-size:26px;color:var(--muted)">/ ${target}</span>
+          </div>
+        </div>
+        <div style="flex:1;max-width:640px">
+          <div style="height:14px;background:var(--track);border-radius:999px;overflow:hidden;border:2px solid var(--border)">
+            <div style="height:100%;width:${target ? Math.min(100, (banked / target) * 100) : 0}%;
+                        background:var(--primary);border-radius:999px;transition:width .5s ease-out"></div>
+          </div>
+        </div>
+      </div>
+      <div style="text-align:right">
+        <div class="label" style="margin-bottom:8px">Total spent</div>
+        <div class="display" style="font-size:44px;color:var(--loss)">${money(state.spent, currency)}</div>
+      </div>
+    </div>`
+
+  if (phase === 'complete') showHuntResult()
+}
+
+function showHuntResult() {
+  const profit = state.profit ?? 0
+  const w = state.winner
+  el('takeover').className = ''
+  el('takeover').innerHTML = `
+    <div style="text-align:center">
+      <div class="label" style="font-size:26px;margin-bottom:20px;color:${profit >= 0 ? 'var(--win)' : 'var(--loss)'}">
+        Hunt complete</div>
+      <div class="display" style="font-size:150px;line-height:1;color:${profit >= 0 ? 'var(--win)' : 'var(--loss)'}">
+        ${signed(profit, currency)}</div>
+      <div class="mono" style="font-size:32px;margin-top:24px;color:var(--muted)">
+        ${money(state.startBalance, currency)} → ${money(state.finalBalance, currency)}</div>
+      ${w ? `
+        <div class="panel celebrate" style="margin-top:44px;padding:32px 56px;display:inline-block">
+          <div class="label" style="color:var(--gold);margin-bottom:12px">Guess the Balance winner</div>
+          <div class="display" style="font-size:56px">@${escapeHtml(w.username)}</div>
+          <div class="mono" style="font-size:26px;margin-top:10px;color:var(--muted)">
+            guessed ${money(w.amount, currency)} · off by ${money(w.difference, currency)}</div>
+        </div>` : ''}
+    </div>`
+}
+
+// ─── Slot Tournament ────────────────────────────────────────────────────────
+
+function renderTournament() {
+  const phase = state.phase
+  const m = state.currentMatch
+
+  if (phase === 'joining') {
+    el('left').innerHTML = stat('Entrants joined', String(state.poolCount ?? 0), 'var(--primary)', 76)
+    el('right').innerHTML = ''
+    el('bottom').innerHTML = `
+      <div class="panel" style="padding:28px 36px;text-align:center">
+        <div style="font-size:32px;font-weight:700">
+          Type <span class="mono" style="color:var(--accent)">!join &lt;slot&gt;</span> to claim a seat
+        </div>
+        <div class="mono" style="font-size:24px;color:var(--muted);margin-top:10px">
+          ${state.seats} seats · slots are unique, first come first served
+        </div>
+      </div>`
+    return
+  }
+
+  if (m && m.a && m.b && m.b !== 'bye') {
+    const split = m.split ?? { aPct: 50, bPct: 50, total: 0 }
+    el('left').innerHTML = contender(m.a, 'var(--primary)', m.winner === 'a')
+    el('right').innerHTML = contender(m.b, 'var(--accent)', m.winner === 'b')
+    el('bottom').innerHTML = `
+      <div class="panel" style="padding:24px 36px">
+        <div style="display:flex;justify-content:space-between;font-size:24px;font-weight:700;margin-bottom:12px">
+          <span style="color:var(--primary)">${split.aPct}%</span>
+          <span style="color:var(--muted)" class="mono">
+            ${m.status === 'voting'
+              ? `<span id="countdown">—</span> · type !vote a or !vote b`
+              : `${split.total} votes`}
+          </span>
+          <span style="color:var(--accent)">${split.bPct}%</span>
+        </div>
+        <div style="height:18px;display:flex;border-radius:999px;overflow:hidden;border:2px solid var(--border)">
+          <div style="background:var(--primary);width:${split.aPct}%;transition:width .4s ease-out"></div>
+          <div style="background:var(--accent);width:${split.bPct}%;transition:width .4s ease-out"></div>
+        </div>
+      </div>`
+  }
+
+  if (phase === 'complete') showTournamentResult()
+}
+
+function contender(s, colour, won) {
+  return `
+  <div class="panel enter" style="padding:28px;${won ? `border-color:${colour}` : ''}">
+    <!-- §20 — username above slot name, everywhere. -->
+    <div class="display truncate" style="font-size:44px;color:${colour}">@${escapeHtml(s.username)}</div>
+    <div class="mono truncate" style="font-size:24px;font-weight:500;color:var(--muted);margin-top:8px">
+      ${escapeHtml(s.slotName)}</div>
+    ${s.multiplier != null ? `
+      <div class="display" style="font-size:68px;margin-top:20px;color:var(--gold)">${multiplier(s.multiplier)}</div>
+      <div class="mono" style="font-size:20px;color:var(--muted);margin-top:6px">
+        ${money(s.buyCost, currency)} → ${money(s.payout, currency)}</div>` : ''}
+  </div>`
+}
+
+function showTournamentResult() {
+  const c = state.champion
+  const t = state.topPredictor
+  el('takeover').className = ''
+  el('takeover').innerHTML = `
+    <div style="text-align:center">
+      <div class="label" style="font-size:26px;color:var(--gold);margin-bottom:20px">Tournament champion</div>
+      ${c ? `<div class="display" style="font-size:110px;line-height:1;color:var(--primary)">@${escapeHtml(c.username)}</div>
+             <div class="mono" style="font-size:34px;margin-top:18px;color:var(--muted)">${escapeHtml(c.slotName)}</div>`
+          : '<div class="display" style="font-size:64px;color:var(--muted)">No champion</div>'}
+      ${t ? `
+        <div class="panel celebrate" style="margin-top:44px;padding:28px 52px;display:inline-block">
+          <div class="label" style="color:var(--accent);margin-bottom:10px">Top predictor</div>
+          <div class="display" style="font-size:48px">@${escapeHtml(t.username)}</div>
+          <div class="mono" style="font-size:24px;margin-top:8px;color:var(--muted)">
+            ${t.correct}/${t.total} called correctly</div>
+        </div>` : ''}
+    </div>`
+}
+
+// ─── shared ─────────────────────────────────────────────────────────────────
+
+function stat(label, value, colour, size) {
+  return `
+  <div class="panel enter" style="padding:24px 28px;margin-bottom:18px">
+    <div class="label" style="margin-bottom:10px">${escapeHtml(label)}</div>
+    <div class="display" style="font-size:${size}px;color:${colour};line-height:1.05">${value}</div>
+  </div>`
+}
+
+/** Ephemeral cues — the only things that animate without a data change. */
+function cue(kind, payload) {
+  if (kind === 'flash' && payload.slotName && payload.win != null) {
+    banner(`${payload.slotName} · ${money(payload.win, currency)} · ${multiplier(payload.multiplier)}`,
+      payload.multiplier >= 100 ? 'var(--gold)' : 'var(--win)')
+  }
+  if (kind === 'matchResult') {
+    const w = payload.winner === 'a' ? payload.a : payload.b
+    banner(`@${w.username} advances · ${multiplier(w.multiplier)}`, 'var(--primary)',
+      // §14 — always state how a tiebreak was decided. An unexplained winner
+      // on stream reads as broken software.
+      payload.decidedBy !== 'multiplier' ? `decided on ${payload.decidedBy}` : null)
+  }
+}
+
+function banner(text, colour, sub) {
+  const node = document.createElement('div')
+  node.className = 'panel celebrate'
+  node.style.cssText = `position:absolute;left:50%;top:64px;transform:translateX(-50%);
+    padding:22px 44px;text-align:center;border-color:${colour};z-index:50`
+  node.innerHTML = `<div class="display" style="font-size:38px;color:${colour}">${escapeHtml(text)}</div>
+    ${sub ? `<div class="mono" style="font-size:20px;color:var(--muted);margin-top:8px">${escapeHtml(sub)}</div>` : ''}`
+  document.getElementById('stage').appendChild(node)
+  setTimeout(() => node.remove(), 6000)
+}
+
+// One shared clock for whichever countdown is on screen.
+setInterval(() => {
+  const node = document.getElementById('countdown')
+  if (!node) return
+  const ends = state.guessWindowEndsAt ?? state.votingEndsAt
+  node.textContent = countdown(ends) ?? '00:00'
+}, 250)
+</script>
+</body>
+</html>
