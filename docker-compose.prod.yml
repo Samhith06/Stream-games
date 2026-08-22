@@ -14,16 +14,21 @@
 # the development password.
 name: streamarena-prod
 
+# Its own anchor, because a service that adds SERVICE below needs to merge
+# these in rather than replace them — Compose does not deep-merge `environment`
+# inherited through <<, the local block wins outright.
+x-app-env: &app-env
+  # Inside the compose network the datastores are reachable by service name,
+  # which is never what .env.prod holds — that file describes the host.
+  DATABASE_URL: postgres://streamarena:${POSTGRES_PASSWORD:-streamarena}@postgres:5432/streamarena
+  REDIS_URL: redis://redis:6379
+
 x-app: &app
   build:
     context: .
   image: streamarena:latest
   env_file: [.env.prod]
-  environment:
-    # Inside the compose network the datastores are reachable by service name,
-    # which is never what .env.prod holds — that file describes the host.
-    DATABASE_URL: postgres://streamarena:${POSTGRES_PASSWORD:-streamarena}@postgres:5432/streamarena
-    REDIS_URL: redis://redis:6379
+  environment: *app-env
   depends_on:
     postgres: { condition: service_healthy }
     redis: { condition: service_healthy }
@@ -73,7 +78,9 @@ services:
 
   web:
     <<: *app
-    command: ["node", "apps/web/dist/index.js"]
+    environment:
+      <<: *app-env
+      SERVICE: web
     ports: ["${WEB_HOST_PORT:-3000}:3000"]
     healthcheck:
       test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3000/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
@@ -84,7 +91,9 @@ services:
 
   worker:
     <<: *app
-    command: ["node", "apps/worker/dist/index.js"]
+    environment:
+      <<: *app-env
+      SERVICE: worker
 
 volumes:
   pgdata:

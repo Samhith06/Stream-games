@@ -15,6 +15,7 @@ import { handleLookupJob } from './lookup.js'
 import { handleTimerJob } from './timers.js'
 import { recoverActiveSessions } from './session-lifecycle.js'
 import { flushQuota, sweepStaleSessions } from './maintenance.js'
+import { startHealthServer } from './health.js'
 
 const ctx = createContext()
 
@@ -121,8 +122,17 @@ async function boot(): Promise<void> {
   ctx.log.info('worker ready')
 }
 
+const health = startHealthServer({
+  port: ctx.env.WORKER_PORT,
+  redis: ctx.redis,
+  log: ctx.log,
+})
+
 async function shutdown(signal: string): Promise<void> {
   ctx.log.info({ signal }, 'worker shutting down')
+  // Stop answering probes first, so the platform stops routing to a process
+  // that is on its way out.
+  health.close()
   // Close the workers first so in-flight jobs finish before the connections
   // they depend on go away — a job killed mid-append is exactly the case the
   // event log's idempotency is there to absorb, but finishing cleanly is better.

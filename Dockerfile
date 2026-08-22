@@ -2,10 +2,13 @@
 
 # One image, two processes (§8). The web and worker share every package and
 # differ only in entrypoint, so building twice would just be two chances for
-# them to drift. Pick the process with the command:
+# them to drift. Pick the process with a variable:
 #
-#   docker run … streamarena node apps/web/dist/index.js
-#   docker run … streamarena node apps/worker/dist/index.js
+#   docker run -e SERVICE=web    … streamarena
+#   docker run -e SERVICE=worker … streamarena
+#
+# A variable rather than a start command, because that is the part a deploy
+# platform will let you script. See scripts/start.mjs.
 
 FROM node:22-alpine AS base
 WORKDIR /app
@@ -61,7 +64,7 @@ COPY --from=build --chown=node:node /app /app
 USER node
 EXPOSE 3000
 
-# No HEALTHCHECK here on purpose: the worker runs from this same image and has
-# no HTTP surface, so the probe belongs with the service definition. The web
-# process answers /healthz (liveness) and /readyz (Redis reachable).
-CMD ["node", "apps/web/dist/index.js"]
+# No HEALTHCHECK here on purpose: the probe belongs with the service definition,
+# which knows the port. Both processes answer /healthz (liveness) and /readyz
+# (datastore reachable) — the worker included, so one deploy config covers both.
+CMD ["node", "scripts/start.mjs"]

@@ -35,6 +35,8 @@ export const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   WEB_PORT: int(3000),
+  /** The worker's health endpoint. Distinct from WEB_PORT so both can run on one box. */
+  WORKER_PORT: int(3001),
   PUBLIC_BASE_URL: z.string().url().default('http://localhost:3000'),
 
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
@@ -75,7 +77,11 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
   // process binds. WEB_PORT stays the explicit knob — it just falls back to
   // PORT, so a platform deploy needs no extra configuration and a health check
   // doesn't quietly probe the wrong port.
-  const parsed = envSchema.safeParse({ ...source, WEB_PORT: source.WEB_PORT || source.PORT })
+  const parsed = envSchema.safeParse({
+    ...source,
+    WEB_PORT: source.WEB_PORT || source.PORT,
+    WORKER_PORT: source.WORKER_PORT || source.PORT,
+  })
   if (!parsed.success) {
     const lines = parsed.error.issues.map((i) => `  ${i.path.join('.')}: ${i.message}`)
     throw new Error(`Invalid environment configuration:\n${lines.join('\n')}`)

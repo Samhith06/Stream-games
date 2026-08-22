@@ -12,9 +12,28 @@ import postgres from 'postgres'
 
 const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'migrations')
 
+/**
+ * Arbitrary but fixed — any migrator in any process must pick the same one.
+ * Kept under 2^53 so it survives as an exact JS number; pg_advisory_lock takes
+ * a bigint and the driver will widen it.
+ */
+const ADVISORY_LOCK_KEY = 8_274_113_905_471_002
+
 export async function migrate(url: string, log: (msg: string) => void = console.log) {
   const sql = postgres(url, { max: 1, prepare: false, onnotice: () => {} })
   try {
+    /*
+     * One migrator at a time.
+     *
+     * Every service runs this on release, and a service can have several
+     * replicas, so concurrent runs are the normal case rather than the
+     * exception. Without the lock two runners read the same `applied` set, both
+     * try the same file, and the loser fails the deploy on a duplicate key —
+     * turning a no-op into a failed release. The lock is released with the
+     * connection, including if this process dies holding it.
+     */
+    await sql`SELECT pg_advisory_lock(${ADVISORY_LOCK_KEY})`
+
     await sql`
       CREATE TABLE IF NOT EXISTS schema_migrations (
         name       TEXT PRIMARY KEY,
