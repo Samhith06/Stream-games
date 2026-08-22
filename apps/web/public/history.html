@@ -100,7 +100,7 @@ function card(s) {
     : 'in progress'
 
   return `
-  <a href="/session?id=${s.id}" class="bg-surface-container rounded-lg border-l-[3px] ${border} border-y border-r
+  <a href="${s.status === 'running' ? `/session?id=${s.id}` : `/recap?id=${s.id}`}" class="bg-surface-container rounded-lg border-l-[3px] ${border} border-y border-r
      border-outline-variant/10 hover:-translate-y-[2px] transition-all block group shadow-lg shadow-black/20">
     <div class="p-md grid grid-cols-1 md:grid-cols-12 gap-md items-center">
       <div class="md:col-span-5 flex items-center gap-sm">

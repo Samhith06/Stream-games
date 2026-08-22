@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html class="dark" lang="en">
+<head>
+<meta charset="utf-8"/><meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Session recap · StreamArena</title>
+<link href="/tailwind.css" rel="stylesheet"/>
+<script src="/theme.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&family=Sora:wght@600;700;800&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+</head>
+<body class="bg-background text-on-surface font-body-md antialiased flex">
+<main class="flex-1 ml-64 min-h-screen">
+  <div class="p-lg max-w-[1400px] mx-auto" id="root">
+    <div class="text-on-surface-variant font-data-mono py-xl text-center">Loading…</div>
+  </div>
+</main>
+
+<script type="module">
+/*
+ * A finished session, read only.
+ *
+ * Separate from /session on purpose. That page is a control surface — editable
+ * bets and wins, Close Entries, End Session — and pointing it at a session that
+ * finished last week invites edits to a result that has already been announced
+ * to chat. History used to link there, which also left the sidebar claiming an
+ * old hunt was the active one.
+ */
+import { api, money, signed, multiplier, escapeHtml, slotTile, $ } from './app.js'
+import { mountShell, gameName } from './shell.js'
+
+const sessionId = new URLSearchParams(location.search).get('id')
+if (!sessionId) location.href = '/history'
+
+const me = await mountShell({ active: '/history' })
+if (!me) throw new Error('unauthorized')
+
+const detail = await api(`/api/sessions/${sessionId}`)
+const currency = detail.config?.currency ?? 'EUR'
+
+// A session still in flight belongs on the live page — the streamer is mid-hunt
+// and wants the controls, not a post-mortem.
+if (detail.status === 'running') location.href = `/session?id=${sessionId}`
+
+setGameTheme(detail.gameId)
+
+let analytics = null
+let state = detail.state ?? {}
+try {
+  const loaded = await api(`/api/sessions/${sessionId}/analytics`)
+  analytics = loaded.analytics
+  state = loaded.state ?? state
+} catch (err) {
+  if (err.code !== 'unreplayable') throw err
+  // §11 — a session written by an older shape of the game. Say so rather than
+  // rendering zeroes that look like a hunt where nothing happened.
+  $('#root').innerHTML = unreplayable(err.message)
+  throw new Error('unreplayable')
+}
+
+render()
+
+function render() {
+  const profit = state.profit ?? 0
+  const good = profit >= 0
+
+  $('#root').innerHTML = `
+    <header class="mb-lg pb-sm border-b border-outline-variant/20 flex flex-wrap items-end justify-between gap-md">
+      <div>
+        <a href="/history" class="text-on-surface-variant hover:text-primary transition-colors
+           font-data-mono text-[13px] flex items-center gap-1 mb-xs">
+          <span class="material-symbols-outlined text-[16px]">arrow_back</span> History
+        </a>
+        <h2 class="font-display-lg text-display-lg">${escapeHtml(gameName(detail.gameId))}</h2>
+        <p class="font-data-mono text-on-surface-variant text-[13px] mt-base">
+          ${escapeHtml(when(detail.startedAt))} · ${escapeHtml(duration(detail.startedAt, detail.endedAt))}
+        </p>
+      </div>
+      <div class="flex items-center gap-sm">
+        <span class="font-label-caps text-label-caps uppercase px-sm py-xs rounded-full border
+          ${good ? 'text-win border-win/40 bg-win/10' : 'text-loss border-loss/40 bg-loss/10'}">
+          ${good ? 'Profit' : 'Loss'}
+        </span>
+        <a href="/api/sessions/${escapeHtml(sessionId)}/export.csv"
+           class="bg-transparent border border-outline-variant hover:border-primary text-on-surface-variant
+                  hover:text-primary px-md py-xs rounded-lg font-body-md font-bold transition-colors
+                  flex items-center gap-xs">
+          <span class="material-symbols-outlined text-[18px]">download</span> CSV
+        </a>
+      </div>
+    </header>
+
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-sm mb-lg">
+      ${tile('Starting balance', money(state.startBalance, currency))}
+      ${tile('Final balance', money(state.finalBalance ?? state.won, currency), 'text-primary')}
+      ${tile('Profit / loss', signed(profit, currency), good ? 'text-win' : 'text-loss')}
+      ${tile('Average multiplier', multiplier(state.averageMultiplier), 'text-tertiary')}
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-gutter">
+      <div class="lg:col-span-2">${slots()}</div>
+      <div class="flex flex-col gap-gutter">${winner()}${insights()}</div>
+    </div>`
+}
+
+function tile(label, value, accent = 'text-on-surface') {
+  return `
+  <div class="bg-surface-container p-md rounded-xl border border-outline-variant flex flex-col justify-center">
+    <span class="text-on-surface-variant font-label-caps text-label-caps uppercase mb-xs">${escapeHtml(label)}</span>
+    <span class="font-data-mono text-[22px] ${accent}">${value}</span>
+  </div>`
+}
+
+function slots() {
+  const entries = state.entries ?? []
+  if (entries.length === 0) return card('Slots', '<p class="text-on-surface-variant p-md">No slots were played.</p>')
+
+  // Best first: the recap is a highlight reel, not a running order.
+  const ranked = [...entries].sort((a, b) => (b.multiplier ?? -1) - (a.multiplier ?? -1))
+
+  return card('Slots', `
+    <table class="w-full text-left">
+      <thead class="bg-surface-container-high">
+        <tr class="font-label-caps text-label-caps text-on-surface-variant uppercase">
+          <th class="p-sm">Slot</th><th class="p-sm">By</th>
+          <th class="p-sm text-right">Bet</th><th class="p-sm text-right">Win</th>
+          <th class="p-sm text-right">Multi</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${ranked.map((e, i) => `
+          <tr class="border-t border-outline-variant/40 ${i === 0 && (e.multiplier ?? 0) > 0 ? 'bg-tertiary/5' : ''}">
+            <td class="p-sm">
+              <div class="flex items-center gap-sm">
+                ${slotTile(e.slotName, e.thumbnail, 'w-9 h-9 rounded object-cover border border-outline-variant/40 text-[12px]')}
+                <div>
+                  <div class="font-bold">${escapeHtml(e.slotName ?? e.rawText ?? '—')}</div>
+                  ${e.bonusType ? `<div class="text-[11px] text-on-surface-variant">${escapeHtml(bonusLabel(e.bonusType))}</div>` : ''}
+                </div>
+              </div>
+            </td>
+            <td class="p-sm text-on-surface-variant font-data-mono text-[13px]">${escapeHtml(e.requestedBy ?? '')}</td>
+            <td class="p-sm text-right font-data-mono text-[13px] text-on-surface-variant">${money(e.bet, currency)}</td>
+            <td class="p-sm text-right font-data-mono">${e.win === null || e.win === undefined ? '—' : money(e.win, currency)}</td>
+            <td class="p-sm text-right font-data-mono font-bold ${(e.multiplier ?? 0) >= 100 ? 'text-tertiary' : ''}">
+              ${multiplier(e.multiplier)}</td>
+          </tr>`).join('')}
+      </tbody>
+    </table>`)
+}
+
+function winner() {
+  if (!state.winner) return ''
+  return card('Guess the Balance', `
+    <div class="p-md flex items-center gap-md">
+      <span class="material-symbols-outlined text-tertiary text-[34px]" style="font-variation-settings:'FILL' 1">trophy</span>
+      <div>
+        <div class="font-bold text-[18px]">${escapeHtml(state.winner.username)}</div>
+        <div class="font-data-mono text-[13px] text-on-surface-variant">
+          Guessed ${money(state.winner.amount, currency)} · final ${money(state.finalBalance, currency)}
+        </div>
+      </div>
+    </div>`)
+}
+
+function insights() {
+  if (!analytics) return ''
+  const rows = [
+    ['Unique chatters', String(analytics.uniqueChatters ?? 0)],
+    ['Total requests', String(analytics.totalRequests ?? 0)],
+    analytics.mostRequested ? ['Most requested', `${analytics.mostRequested.name} (${analytics.mostRequested.requests})`] : null,
+    analytics.worstSlot ? ['Worst slot', `${analytics.worstSlot.name} · ${multiplier(analytics.worstSlot.multiplier)}`] : null,
+  ].filter(Boolean)
+
+  const top = (analytics.topRequesters ?? []).slice(0, 5)
+
+  return card('Chat', `
+    <ul class="p-md flex flex-col gap-sm">
+      ${rows.map(([k, v]) => `
+        <li class="flex justify-between items-center gap-md">
+          <span class="text-on-surface-variant">${escapeHtml(k)}</span>
+          <span class="font-data-mono text-right">${escapeHtml(v)}</span>
+        </li>`).join('')}
+    </ul>
+    ${top.length === 0 ? '' : `
+      <div class="px-md pb-md">
+        <div class="font-label-caps text-label-caps text-on-surface-variant uppercase mb-xs">Top requesters</div>
+        ${top.map((r) => `
+          <div class="flex justify-between items-center py-1 font-data-mono text-[13px]">
+            <span class="truncate">${escapeHtml(r.username)}</span>
+            <span class="text-on-surface-variant">${r.accepted}</span>
+          </div>`).join('')}
+      </div>`}`)
+}
+
+function card(title, inner) {
+  return `
+  <div class="bg-surface-container rounded-xl border border-outline-variant overflow-hidden">
+    <div class="p-md border-b border-outline-variant bg-surface-container-high">
+      <h3 class="font-headline-md text-[18px] font-bold">${escapeHtml(title)}</h3>
+    </div>
+    ${inner}
+  </div>`
+}
+
+function unreplayable(message) {
+  return `
+  <div class="bg-surface-container rounded-xl border border-error/40 p-xl text-center">
+    <span class="material-symbols-outlined text-error text-[40px]">history_toggle_off</span>
+    <h2 class="font-headline-md text-headline-md mt-sm mb-xs">Can't replay this one</h2>
+    <p class="text-on-surface-variant max-w-md mx-auto">${escapeHtml(message)}</p>
+    <a href="/history" class="inline-block mt-lg bg-primary text-on-primary font-bold px-lg py-sm rounded-lg">
+      Back to history</a>
+  </div>`
+}
+
+const bonusLabel = (type) =>
+  ({ regular: 'Regular bonus', super: 'Super bonus', five_scatter: '5 scatter' })[type] ?? type
+
+function when(iso) {
+  if (!iso) return '—'
+  return new Date(iso).toLocaleString('en-GB',
+    { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
+
+function duration(from, to) {
+  if (!from || !to) return 'in progress'
+  const ms = new Date(to).getTime() - new Date(from).getTime()
+  const hours = Math.floor(ms / 3_600_000)
+  const minutes = Math.floor((ms % 3_600_000) / 60_000)
+  return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`
+}
+</script>
+</body>
+</html>

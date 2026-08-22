@@ -23,6 +23,9 @@ const PAGES: Record<string, string> = {
   '/setup': 'setup.html',
   '/session': 'session.html',
   '/history': 'history.html',
+  // A finished session, read-only. Distinct from /session, which is a live
+  // control surface and must not be pointed at a result already announced.
+  '/recap': 'recap.html',
   '/settings': 'settings.html',
 }
 

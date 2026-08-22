@@ -42,6 +42,19 @@ const me = await mountShell({ active: '/session' })
 if (!me) throw new Error('unauthorized')
 
 const detail = await api(`/api/sessions/${sessionId}`)
+
+/*
+ * This page is a control surface: editable bets and wins, close entries, end
+ * session. Pointed at a session that already finished it would invite edits to
+ * a result chat has been told, and the sidebar would call an old hunt the
+ * active one. Finished sessions belong on the read-only recap.
+ *
+ * `created` still lands here — that session has not started but is about to.
+ */
+if (detail.status === 'ended' || detail.status === 'abandoned') {
+  location.replace(`/recap?id=${sessionId}`)
+}
+
 const gameId = detail.gameId
 setGameTheme(gameId)
 const currency = detail.config.currency ?? 'EUR'
