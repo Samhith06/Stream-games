@@ -18,10 +18,17 @@ if (!url) {
 }
 
 try {
-  if (task === 'migrate') await migrate(url)
+  // `release` is one command on purpose: a deploy platform runs preDeployCommand
+  // without a shell, so `migrate && seed` arrives as extra argv that argv[2]
+  // silently ignores — the migration runs, the seed never does, and the deploy
+  // reports success with an empty slot catalog.
+  if (task === 'release') {
+    await migrate(url)
+    await seed(url)
+  } else if (task === 'migrate') await migrate(url)
   else if (task === 'seed') await seed(url)
   else {
-    console.error('usage: node scripts/db.mjs migrate|seed')
+    console.error('usage: node scripts/db.mjs release|migrate|seed')
     process.exit(1)
   }
 } catch (err) {

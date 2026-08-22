@@ -73,7 +73,7 @@ services:
     <<: *app
     depends_on:
       postgres: { condition: service_healthy }
-    command: ["node", "scripts/db.mjs", "migrate"]
+    command: ["node", "scripts/db.mjs", "release"]
     restart: "no"
 
   web:
