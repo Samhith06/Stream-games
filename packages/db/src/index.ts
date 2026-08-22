@@ -1,6 +1,7 @@
 export * from './client.js'
 export * from './schema.js'
 export * from './migrate.js'
+export * from './import-slots.js'
 export * from './seed-slots.js'
 export * from './repositories/sessions.js'
 export * from './repositories/events.js'

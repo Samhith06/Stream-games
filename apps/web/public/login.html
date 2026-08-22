@@ -51,7 +51,17 @@
     <footer class="mt-xl flex items-center justify-center gap-sm font-data-mono text-data-mono text-on-surface-variant/50">
       <a class="hover:text-primary transition-colors" href="#">Terms</a><span>·</span>
       <a class="hover:text-primary transition-colors" href="#">Privacy</a><span>·</span>
-      <a class="hover:text-primary transition-colors" href="#">Docs</a>
+      <a class="hover:text-primary transition-colors" href="#">Docs</a><span>·</span>
+      <!--
+        Attribution, and a licence condition rather than a courtesy. slot.report
+        supply the ~6,000-slot catalog free "with an active dofollow link", and
+        this is that link — plain, no rel="nofollow", which is what dofollow
+        means. Remove it and the API key lapses and the import is no longer
+        licensed; the curated seed keeps working, the breadth does not.
+        See packages/db/src/import-slots.ts.
+      -->
+      <a class="hover:text-primary transition-colors" href="https://slot.report"
+         title="Slot data by slot.report">Slot data by slot.report</a>
     </footer>
   </main>
 
