@@ -131,8 +131,9 @@ export const bonusHunt: GameModule<BonusHuntState, BonusHuntConfig> = {
         })),
 
       // The emotional centre of the game (§13) — the largest number on the
-      // overlay during collection and guessing.
-      breakEvenPerBonus: d.breakEvenPerBonus,
+      // overlay during collection and opening. Streamers talk in multiples,
+      // which compare across bet sizes in a way a money figure does not.
+      breakEvenMultiplier: d.breakEvenMultiplier,
       spent: d.spent,
       won: state.totals.won,
       profit: d.profit,

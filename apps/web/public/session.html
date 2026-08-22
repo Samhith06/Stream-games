@@ -159,13 +159,13 @@ function hunt() {
   return `
   ${header(phases, current)}
 
-  <div class="grid grid-cols-2 md:grid-cols-5 gap-sm mb-lg">
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-sm mb-lg">
     ${statTile('Starting balance', money(state.startBalance, currency))}
     ${statTile('Bonuses banked', `${banked}<span class="text-on-surface-variant text-[14px]"> / ${target}</span>`,
       { accent: 'text-primary', border: 'border-primary/30', sub: `${state.suggestionCount ?? 0} suggested` })}
-    ${statTile('Spent', money(state.spent, currency), { accent: 'text-error' })}
-    ${statTile('Break-even / bonus', money(state.breakEvenPerBonus, currency),
-      { accent: 'text-tertiary', border: 'border-tertiary/50', icon: 'stars' })}
+    ${statTile('Break-even average', breakEven(),
+      { accent: 'text-tertiary', border: 'border-tertiary/50', icon: 'stars',
+        sub: 'per remaining bonus' })}
     ${statTile('Participants', String(state.participantCount ?? 0), { icon: 'group' })}
   </div>
 
@@ -781,7 +781,7 @@ function wire() {
     }))
 
   // Entry actions
-  on('[data-collect]', 'click', (e) => act('entry.markCollected', { entryId: e.currentTarget.dataset.collect }))
+  on('[data-collect]', 'click', (e) => collectDialog(e.currentTarget.dataset.collect))
   on('[data-uncollect]', 'click', (e) => act('entry.uncollect', { entryId: e.currentTarget.dataset.uncollect }))
   on('[data-remove]', 'click', (e) => act('entry.remove', { entryId: e.currentTarget.dataset.remove }))
 
@@ -917,6 +917,95 @@ function slotSearch() {
 }
 
 // ─── dialog ─────────────────────────────────────────────────────────────────
+
+/**
+ * The required average multiplier, or an honest dash.
+ *
+ * null means no stake has been recorded yet, which is different from zero —
+ * zero would read as "already home" when in fact nothing is known.
+ */
+function breakEven() {
+  const x = state.breakEvenMultiplier
+  return x === null || x === undefined
+    ? '<span class="text-on-surface-variant">—</span>'
+    : `${x.toFixed(2)}x`
+}
+
+const BONUS_TYPES = [
+  ['regular', 'Regular', 'Landed in normal play'],
+  ['super', 'Super', 'Bought or super version'],
+  ['five_scatter', '5 Scatter', 'Five-scatter trigger'],
+]
+
+/**
+ * Asked at the moment of banking a bonus, because that is the one point where
+ * the streamer knows both the bet they were on and how it triggered. The bet is
+ * not optional book-keeping: the break-even multiplier is computed from the
+ * stakes, so a bonus banked without one silently weakens the headline number.
+ */
+function collectDialog(entryId) {
+  const entry = (state.entries ?? []).find((e) => e.id === entryId)
+  const suggested = entry?.bet || detail.config?.defaultBet || ''
+
+  const dialog = $('#dialog')
+  dialog.innerHTML = `
+    <div class="bg-surface-container rounded-xl border border-outline-variant shadow-xl max-w-md w-full p-xl relative overflow-hidden">
+      <div class="absolute top-0 left-0 w-full h-1 bg-primary"></div>
+      <h2 class="font-display-lg-mobile text-display-lg-mobile font-bold mb-base">Bank this bonus</h2>
+      <p class="text-on-surface-variant mb-lg">${escapeHtml(entry?.slotName ?? entry?.rawText ?? 'Slot')}</p>
+
+      <label class="block font-label-caps text-label-caps text-on-surface-variant uppercase mb-xs">Base bet</label>
+      <input id="collect-bet" type="number" step="0.01" min="0" value="${escapeHtml(String(suggested))}"
+             class="input-dark w-full rounded-lg px-sm py-xs font-data-mono text-[18px] mb-lg" autocomplete="off">
+
+      <label class="block font-label-caps text-label-caps text-on-surface-variant uppercase mb-xs">Bonus type</label>
+      <div class="grid grid-cols-3 gap-xs mb-lg" id="collect-type">
+        ${BONUS_TYPES.map(([value, label, hint], i) => `
+          <button data-type="${value}" title="${escapeHtml(hint)}"
+            class="type-btn px-sm py-sm rounded-lg border font-bold text-sm transition-colors
+                   ${i === 0 ? 'border-primary bg-primary/20 text-primary' : 'border-outline-variant text-on-surface-variant hover:border-primary/50'}">
+            ${label}</button>`).join('')}
+      </div>
+
+      <div class="flex gap-md justify-end">
+        <button id="dlg-cancel" class="px-md py-sm rounded-lg font-bold text-on-surface-variant hover:bg-surface-variant
+          transition-colors font-label-caps uppercase">Cancel</button>
+        <button id="dlg-ok" class="bg-primary text-on-primary px-md py-sm rounded-lg font-bold font-label-caps uppercase">
+          Bank it</button>
+      </div>
+    </div>`
+
+  dialog.classList.remove('hidden')
+  dialog.classList.add('flex')
+
+  const BASE = 'type-btn px-sm py-sm rounded-lg border font-bold text-sm transition-colors'
+  const SELECTED = `${BASE} border-primary bg-primary/20 text-primary`
+  const UNSELECTED = `${BASE} border-outline-variant text-on-surface-variant hover:border-primary/50`
+
+  let bonusType = 'regular'
+  const paintTypes = () => {
+    for (const button of dialog.querySelectorAll('.type-btn')) {
+      button.className = button.dataset.type === bonusType ? SELECTED : UNSELECTED
+    }
+  }
+  for (const button of dialog.querySelectorAll('.type-btn')) {
+    button.onclick = () => { bonusType = button.dataset.type; paintTypes() }
+  }
+  paintTypes()
+
+  const close = () => { dialog.classList.add('hidden'); dialog.classList.remove('flex') }
+  $('#dlg-cancel').onclick = close
+  $('#dlg-ok').onclick = async () => {
+    const bet = Number($('#collect-bet').value)
+    if (!Number.isFinite(bet) || bet < 0) return toast('Enter the base bet', 'error')
+    await act('entry.markCollected', { entryId, bet, bonusType })
+    close()
+  }
+
+  // Enter banks it; the streamer is mid-hunt and should not need the mouse.
+  $('#collect-bet').onkeydown = (e) => { if (e.key === 'Enter') $('#dlg-ok').click() }
+  setTimeout(() => $('#collect-bet')?.select(), 50)
+}
 
 function confirmDialog(title, body, onConfirm, { html = false } = {}) {
   const dialog = $('#dialog')

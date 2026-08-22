@@ -19,6 +19,13 @@ export type HuntPhase = 'collecting' | 'guessing' | 'opening' | 'complete'
  */
 export type EntryStatus = 'pending' | 'queued' | 'collected' | 'opened'
 
+/**
+ * How the bonus was entered. Recorded when the streamer banks it, because a
+ * 100x from a regular bonus and a 100x from a bought super are not the same
+ * result and chat will say so.
+ */
+export type BonusType = 'regular' | 'super' | 'five_scatter'
+
 export interface SlotSuggestion {
   slotId: string
   name: string
@@ -37,7 +44,10 @@ export interface HuntEntry {
   /** What the viewer actually typed. Feeds the unresolved queue and the audit. */
   rawText: string
   requestedBy: { userId: string; username: string; role: string }
+  /** The base bet the bonus was played at. The multiplier is win / bet. */
   bet: number
+  /** null until the streamer banks it and says which kind it was. */
+  bonusType: BonusType | null
   win: number | null
   status: EntryStatus
   order: number

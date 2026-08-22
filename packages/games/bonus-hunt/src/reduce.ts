@@ -39,6 +39,7 @@ import {
 import {
   GUESS_TIMER_ID,
   type BonusHuntConfig,
+  type BonusType,
   type BonusHuntState,
   type HuntEntry,
   type LookupThen,
@@ -166,6 +167,7 @@ function requestSlot(
     rawText: query,
     requestedBy: { userId: actor.userId, username: actor.username, role: actor.role },
     bet: ctx.config.defaultBet,
+    bonusType: null,
     win: null,
     status: 'pending',
     order: nextOrder(state),
@@ -345,8 +347,8 @@ function statusReply(
       ? `Bonus hunt: ${state.entries.length}/${ctx.config.targetBonuses} bonuses collected. ` +
         `Type !sr <slot> to add one.`
       : state.phase === 'guessing'
-        ? `${state.entries.length} bonuses, ${money(d.spent)} spent — break-even is ` +
-          `${money(d.breakEvenPerBonus)} per bonus. Type !guess <amount> for the final balance.`
+        ? `${state.entries.length} bonuses — break-even needs ` +
+          `${multi(d.breakEvenMultiplier)} average. Type !guess <amount> for the final balance.`
         : state.phase === 'opening'
           ? `Opening ${d.openedCount}/${d.totalBonuses}. Running total ${money(state.totals.won)} ` +
             `against ${money(d.spent)} spent.`
@@ -478,10 +480,14 @@ function handleControl(
     case 'entry.markCollected':
       // The streamer banked the bonus. This is what frees the requester to
       // suggest another when the outstanding cap is in force.
+      // The bet and bonus type arrive with the collect, because that is the one
+      // moment the streamer knows both — and the required-multiplier figure is
+      // only as honest as the bets behind it.
       return patchEntry(state, String(p.entryId ?? ''), (e) => ({
         ...e,
         status: e.status === 'opened' ? 'opened' : 'collected',
         ...(p.bet !== undefined ? { bet: Math.max(0, round2(Number(p.bet))) } : {}),
+        ...(isBonusType(p.bonusType) ? { bonusType: p.bonusType } : {}),
       }))
     case 'entry.uncollect':
       // Misclicks happen mid-stream; putting it back in the queue must not cost
@@ -527,6 +533,7 @@ function addEntry(state: BonusHuntState, p: Record<string, unknown>, ctx: Ctx): 
       role: String(p.requestedByRole ?? 'broadcaster'),
     },
     bet: Math.max(0, round2(Number(p.bet ?? ctx.config.defaultBet))),
+    bonusType: null,
     win: null,
     // A slot the streamer adds by hand is one they are about to play, so it
     // starts queued rather than banked.
@@ -689,8 +696,8 @@ function closeCollection(state: BonusHuntState, p: Record<string, unknown>, ctx:
     effects: [
       timer(windowMs, { kind: 'guessWindowEnd' }, GUESS_TIMER_ID),
       announce(
-        `Guess the Balance is open! ${next.entries.length} bonuses, ${money(spent)} spent — ` +
-          `break-even is ${money(d.breakEvenPerBonus)} per bonus. ` +
+        `Guess the Balance is open! ${next.entries.length} bonuses — ` +
+          `break-even needs ${multi(d.breakEvenMultiplier)} average. ` +
           `Type !guess <amount> for the final balance. ${Math.round(windowMs / 1000)}s on the clock.`,
       ),
     ],
@@ -797,6 +804,18 @@ function entryId(seq: number): string {
 
 function replace(entries: readonly HuntEntry[], patched: HuntEntry): HuntEntry[] {
   return entries.map((e) => (e.id === patched.id ? patched : e))
+}
+
+const BONUS_TYPES = ['regular', 'super', 'five_scatter'] as const
+
+/** Control payloads arrive off the wire, so the value is checked, not asserted. */
+function isBonusType(value: unknown): value is BonusType {
+  return typeof value === 'string' && (BONUS_TYPES as readonly string[]).includes(value)
+}
+
+/** Chat-facing formatting for a required multiplier. */
+function multi(value: number | null): string {
+  return value === null ? 'an unknown multiple' : `${value.toFixed(2)}x`
 }
 
 function patchEntry(

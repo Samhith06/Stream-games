@@ -1,22 +1,56 @@
 /**
  * §13 — "Derived values — computed, never stored."
  *
- *   spent             = startBalance - balanceAtEndOfCollection
- *   breakEvenPerBonus = spent / entries.length
- *   profit            = totals.won - spent
- *   returnMultiple    = totals.won / spent
- *   remainingBonuses  = entries.filter(e => e.status !== 'opened').length
+ *   spent              = startBalance - balanceAtEndOfCollection
+ *   profit             = totals.won - spent
+ *   returnMultiple     = totals.won / spent
+ *   remainingBonuses   = entries.filter(e => e.status !== 'opened').length
  *
- * breakEvenPerBonus is the emotional centre of the game and should be the
- * largest number on the overlay during collection and guessing.
+ *   breakEvenMultiplier = (startBalance - won) / sum(bet of unopened bonuses)
+ *
+ * The multiplier is the emotional centre of the game and should be the largest
+ * number on the overlay during collection and opening. Streamers talk in
+ * multiples, not money — "we need 40x average" means something to chat in a way
+ * that "we need EUR 180 a bonus" does not, because it is comparable across
+ * different bet sizes and different hunts.
+ *
+ * It is measured against the *starting balance*: what you have to pull back to
+ * be whole. As bonuses open and wins land the target shrinks, so the number
+ * falls through the opening phase and reaching 0 is the moment of breaking even.
  */
 
 import { round2 } from '@streamarena/core'
 import type { BonusHuntState, HuntEntry } from './types.js'
 
+/**
+ * The average multiplier the bonuses still to open must hit to recover the
+ * starting balance.
+ *
+ * Only banked-but-unopened bonuses count on the stake side: an opened bonus has
+ * already paid whatever it paid, and that win is subtracted from the target
+ * instead. So the number answers the only question that matters mid-hunt —
+ * "given what is left, what does each one need to average?"
+ *
+ * null rather than 0 when there is nothing left to open or no stake recorded:
+ * the answer is genuinely undefined, and 0 would read as "we are home".
+ */
+export function breakEvenMultiplier(state: BonusHuntState): number | null {
+  const unopened = state.entries.filter((e) => e.status === 'collected')
+  const stake = unopened.reduce((sum, e) => sum + (e.bet ?? 0), 0)
+  if (stake <= 0) return null
+
+  const remaining = state.startBalance - state.totals.won
+  // Already ahead: nothing more is *needed*, which is worth showing as 0.
+  if (remaining <= 0) return 0
+
+  return round2(remaining / stake)
+}
+
 export interface HuntDerived {
   spent: number
-  breakEvenPerBonus: number
+  /** Average multiplier the unopened bonuses must average to recover the start
+   *  balance. null when nothing is left to open, or no stake is recorded. */
+  breakEvenMultiplier: number | null
   profit: number
   returnMultiple: number
   remainingBonuses: number
@@ -50,7 +84,7 @@ export function derive(state: BonusHuntState): HuntDerived {
 
   return {
     spent,
-    breakEvenPerBonus: totalBonuses === 0 ? 0 : round2(spent / totalBonuses),
+    breakEvenMultiplier: breakEvenMultiplier(state),
     profit: round2(state.totals.won - spent),
     returnMultiple: spent === 0 ? 0 : round2(state.totals.won / spent),
     remainingBonuses: totalBonuses - opened.length,

@@ -324,8 +324,64 @@ test('only banked bonuses count toward the target and break-even', () => {
   const projected = bonusHunt.project(state) as Record<string, number>
   assert.equal(projected.collectedCount, 2, 'two banked')
   assert.equal(projected.suggestionCount, 3, 'three suggested')
-  // 400 spent over the two bonuses that will actually be opened.
-  assert.equal(projected.breakEvenPerBonus, 200)
+  // 5000 start over 200 staked on the two bonuses that will actually be opened.
+  // The third never produced a bonus, so its stake is not in the denominator —
+  // counting it would flatter the number the streamer is quoting to chat.
+  assert.equal(projected.breakEvenMultiplier, 25)
+})
+
+test('break-even falls as wins land, and bottoms out at zero', () => {
+  const opened = (id: string, win: number) => control('entry.setWin', { entryId: id, win })
+
+  const { state } = run([
+    sr('alice', 'gates'),
+    sr('bob', 'sugar'),
+    resolved('e1', 'slot-1', 'Gates of Olympus'),
+    resolved('e2', 'slot-2', 'Sugar Rush'),
+    control('entry.markCollected', { entryId: 'e1', bet: 100 }),
+    control('entry.markCollected', { entryId: 'e2', bet: 100 }),
+    control('collection.close', { balanceNow: 4600 }),
+    control('guesses.lock', {}),
+    // One opens for 2000: 3000 left to find on the single remaining 100 stake.
+    opened('e1', 2000),
+  ])
+
+  const projected = bonusHunt.project(state) as Record<string, number | null>
+  assert.equal(projected.breakEvenMultiplier, 30)
+})
+
+test('break-even is null, not zero, when no stake is recorded', () => {
+  // Zero would read as "we are already home". Nothing is known yet, and the
+  // overlay has to be able to say so rather than claim a number.
+  const { state } = run([
+    sr('alice', 'gates'),
+    resolved('e1', 'slot-1', 'Gates of Olympus'),
+    control('entry.markCollected', { entryId: 'e1' }),
+  ])
+
+  const projected = bonusHunt.project(state) as Record<string, number | null>
+  assert.equal(projected.breakEvenMultiplier, null)
+})
+
+test('the bonus type is recorded when the streamer banks it', () => {
+  const { state } = run([
+    sr('alice', 'gates'),
+    resolved('e1', 'slot-1', 'Gates of Olympus'),
+    control('entry.markCollected', { entryId: 'e1', bet: 2, bonusType: 'super' }),
+  ])
+
+  assert.equal(state.entries[0]!.bonusType, 'super')
+  assert.equal(state.entries[0]!.bet, 2)
+})
+
+test('a bonus type off the wire is checked, not trusted', () => {
+  const { state } = run([
+    sr('alice', 'gates'),
+    resolved('e1', 'slot-1', 'Gates of Olympus'),
+    control('entry.markCollected', { entryId: 'e1', bet: 2, bonusType: 'nonsense' }),
+  ])
+
+  assert.equal(state.entries[0]!.bonusType, null, 'an unknown type is dropped, not stored')
 })
 
 test('uncollecting puts a bonus back in the queue', () => {
@@ -374,8 +430,8 @@ test('closing collection captures spent once and opens a timed window (§13)', (
     sr('bob', 'sugar'),
     resolved('e1', 'slot-1', 'Gates of Olympus'),
     resolved('e2', 'slot-2', 'Sugar Rush'),
-    control('entry.markCollected', { entryId: 'e1' }),
-    control('entry.markCollected', { entryId: 'e2' }),
+    control('entry.markCollected', { entryId: 'e1', bet: 100 }),
+    control('entry.markCollected', { entryId: 'e2', bet: 100 }),
     control('collection.close', { balanceNow: 3200 }),
   ])
 
@@ -389,7 +445,8 @@ test('closing collection captures spent once and opens a timed window (§13)', (
 
   // Break-even is the emotional centre of the game, so it goes in the call to
   // action: 1800 spent over 2 bonuses = 900 each.
-  assert.match(announcements(effects)[0]!.text, /break-even is €900/)
+  // 5000 to recover across 200 staked on the two banked bonuses.
+  assert.match(announcements(effects)[0]!.text, /break-even needs 25\.00x average/)
 })
 
 test('k/K guesses expand and absurd guesses hit the sanity ceiling (§13)', () => {

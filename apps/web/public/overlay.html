@@ -223,6 +223,17 @@ function renderTabs(phase) {
 }
 
 /** A stat card: coloured top edge, matching bloom behind it, icon on the right. */
+/**
+ * The required average multiplier.
+ *
+ * A dash when no stake is recorded — zero would tell chat the hunt is already
+ * home when in truth nothing is yet known.
+ */
+function breakEvenText() {
+  const x = state.breakEvenMultiplier
+  return x === null || x === undefined ? '—' : `${x.toFixed(2)}x`
+}
+
 function statCard(label, value, colour, icon, size) {
   return `
   <div class="card enter" style="border-top-color:${colour};margin-bottom:16px">
@@ -342,9 +353,9 @@ function renderHunt() {
 
   el('left').innerHTML = `
     ${statCard('Starting balance', money(state.startBalance, currency), 'var(--primary)', ICON.wallet, 40)}
-    ${phase === 'collecting' || phase === 'guessing'
-      ? statCard('Break-even per bonus', money(state.breakEvenPerBonus, currency), 'var(--gold)', ICON.target, 56)
-      : statCard('Total won', money(state.won, currency), 'var(--primary)', ICON.wallet, 50)}
+    ${phase === 'complete'
+      ? statCard('Total won', money(state.won, currency), 'var(--primary)', ICON.wallet, 50)
+      : statCard('Break-even average', breakEvenText(), 'var(--gold)', ICON.target, 56)}
     ${phase === 'opening' || phase === 'complete'
       ? statCard('Profit / loss', signed(state.profit ?? 0, currency),
                  (state.profit ?? 0) >= 0 ? 'var(--win)' : 'var(--loss)', ICON.target, 46)
@@ -401,8 +412,9 @@ function renderHunt() {
         </div>
       </div>
       <div style="text-align:right">
-        <div class="label" style="margin-bottom:8px">Total spent</div>
-        <div class="display" style="font-size:44px;color:var(--loss)">${money(state.spent, currency)}</div>
+        <div class="label" style="margin-bottom:8px">Total won</div>
+        <div class="display" style="font-size:44px;color:${(state.won ?? 0) > 0 ? 'var(--win)' : 'var(--muted)'}">
+          ${money(state.won ?? 0, currency)}</div>
       </div>
     </div>`
 
