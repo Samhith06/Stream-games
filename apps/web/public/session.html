@@ -768,7 +768,6 @@ function showCue(kind, payload) {
 
 function wire() {
   const on = (sel, event, fn) => document.querySelectorAll(sel).forEach((el) => el.addEventListener(event, fn))
-  const act = (action, payload) => attempt(() => control(sessionId, action, payload))
 
   on('[data-copy]', 'click', (e) => copy(e.currentTarget.dataset.copy, 'Overlay URL copied'))
 
@@ -940,6 +939,17 @@ const BONUS_TYPES = [
  * not optional book-keeping: the break-even multiplier is computed from the
  * stakes, so a bonus banked without one silently weakens the headline number.
  */
+/**
+ * Every dashboard mutation goes through one endpoint (§10).
+ *
+ * A declaration at module scope, not a const inside wire(): dialogs and other
+ * handlers defined outside wire() need it too, and a const would also be in its
+ * temporal dead zone during the first draw().
+ */
+function act(action, payload) {
+  return attempt(() => control(sessionId, action, payload))
+}
+
 function collectDialog(entryId) {
   const entry = (state.entries ?? []).find((e) => e.id === entryId)
   const suggested = entry?.bet || detail.config?.defaultBet || ''
