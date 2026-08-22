@@ -346,8 +346,12 @@ start command, which is why there are two config files:
 
 | Service | Settings → Config-as-code path |
 |---|---|
-| web | `railway.web.json` |
+| web | *(none — Railway picks up `railway.json` at the root by itself)* |
 | worker | `railway.worker.json` |
+
+The web service needs no setting because Railway reads root `railway.json`
+automatically. The worker is the one that has to be pointed elsewhere, or it
+would inherit the web start command and run migrations a second time.
 
 `railway.web.json` runs migrations as its pre-deploy command, so the schema is
 applied once per release before the new container takes traffic. The worker has
