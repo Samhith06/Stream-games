@@ -284,7 +284,9 @@ function entryRow(e, phase) {
       <div class="flex items-center gap-sm">
         ${slotTile(e.slotName, e.thumbnail, 'w-10 h-10 rounded object-cover border border-outline-variant/40 text-[13px]')}
         <div>
-          <div class="font-bold text-on-surface">${escapeHtml(e.slotName)}</div>
+          <div class="font-bold text-on-surface flex items-center gap-xs">
+            ${escapeHtml(e.slotName)}${bonusBadge(e.bonusType)}
+          </div>
           ${e.provider ? `<div class="text-[11px] text-on-surface-variant">${escapeHtml(e.provider)}</div>` : ''}
         </div>
       </div>
@@ -961,6 +963,23 @@ const BONUS_TYPES = [
  */
 function act(action, payload) {
   return attempt(() => control(sessionId, action, payload))
+}
+
+/**
+ * A badge only for the types that change how a win reads. A regular bonus is
+ * the default, and labelling every row would make the badge noise rather than
+ * a signal — which is the whole reason to record the type.
+ */
+function bonusBadge(type) {
+  if (type === 'five_scatter') {
+    return `<span class="bg-tertiary text-on-tertiary text-[10px] font-bold px-2 py-0.5
+              rounded-full whitespace-nowrap">5-Scatter</span>`
+  }
+  if (type === 'super') {
+    return `<span class="bg-gradient-to-r from-primary to-loss text-on-primary text-[10px] font-bold
+              px-2 py-0.5 rounded-full whitespace-nowrap">Super</span>`
+  }
+  return ''
 }
 
 function collectDialog(entryId) {

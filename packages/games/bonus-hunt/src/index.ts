@@ -123,6 +123,9 @@ export const bonusHunt: GameModule<BonusHuntState, BonusHuntConfig> = {
           provider: e.provider,
           thumbnail: e.thumbnail,
           bet: e.bet,
+          // Chat reads a 100x from a bought super differently from a 100x that
+          // landed in normal play, so the overlay says which it was.
+          bonusType: e.bonusType,
           win: e.win,
           multiplier: e.win !== null && e.bet > 0 ? Math.round((e.win / e.bet) * 100) / 100 : null,
           status: e.status,

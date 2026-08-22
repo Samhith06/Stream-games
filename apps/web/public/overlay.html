@@ -145,6 +145,17 @@
   .entry-name { font-size: 22px; font-weight: 700; }
   .entry-who  { font-family: 'JetBrains Mono', monospace; font-size: 17px; font-weight: 500; color: var(--muted); }
 
+  /*
+   * Bonus type. Only the two that change how a result reads get a badge — a
+   * regular bonus is the default and labelling every row would turn the badge
+   * into noise rather than a signal.
+   */
+  .badge { flex-shrink: 0; padding: 2px 10px; border-radius: 999px;
+           font-family: 'JetBrains Mono', monospace; font-size: 15px; font-weight: 700;
+           letter-spacing: .06em; text-transform: uppercase; line-height: 1.5; }
+  .badge-scatter { background: var(--gold); color: #23211a; }
+  .badge-super { background: linear-gradient(90deg, var(--primary), var(--loss)); color: #fff; }
+
   .bar { height: 14px; border-radius: 999px; overflow: hidden;
          background: var(--track); border: 2px solid var(--border); }
   .bar-fill { height: 100%; border-radius: 999px; background: var(--primary);
@@ -256,10 +267,17 @@ function statCard(label, value, colour, icon, size) {
  * restarts the CSS animation, so an untracked rebuild would make the list stutter
  * back to the top several times a minute.
  */
+/** A badge only for the types that change how a win reads. */
+function bonusBadge(type) {
+  if (type === 'five_scatter') return '<span class="badge badge-scatter">5-Scatter</span>'
+  if (type === 'super') return '<span class="badge badge-super">Super</span>'
+  return ''
+}
+
 let queueSignature = null
 
 function renderQueue(entries) {
-  const signature = entries.map((e) => `${e.slotName}|${e.requestedBy}|${e.status}`).join('~')
+  const signature = entries.map((e) => `${e.slotName}|${e.requestedBy}|${e.status}|${e.bonusType}`).join('~')
   if (signature === queueSignature) return
   queueSignature = signature
 
@@ -282,7 +300,10 @@ function renderQueue(entries) {
       <div class="entry ${banked ? '' : 'waiting'}">
         ${slotTile(e.slotName, e.thumbnail, 'thumb')}
         <div class="grow">
-          <div class="entry-name truncate">${escapeHtml(e.slotName)}</div>
+          <div style="display:flex;align-items:center;gap:8px;min-width:0">
+            <span class="entry-name truncate">${escapeHtml(e.slotName)}</span>
+            ${bonusBadge(e.bonusType)}
+          </div>
           <div class="entry-who truncate">@${escapeHtml(e.requestedBy)}</div>
         </div>
         ${mark}
