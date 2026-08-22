@@ -17,7 +17,7 @@ const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'migr
  * Kept under 2^53 so it survives as an exact JS number; pg_advisory_lock takes
  * a bigint and the driver will widen it.
  */
-const ADVISORY_LOCK_KEY = 8_274_113_905_471_002
+export const ADVISORY_LOCK_KEY = 8_274_113_905_471_002
 
 export async function migrate(url: string, log: (msg: string) => void = console.log) {
   const sql = postgres(url, { max: 1, prepare: false, onnotice: () => {} })

@@ -185,6 +185,31 @@ export class AliasRepository {
    * "Every resolution a streamer or mod makes in the unresolved queue creates a
    * learned alias. Frequency across channels raises its weight."
    */
+  /**
+   * Makes sure a curated alias exists, without disturbing it if it does.
+   *
+   * Distinct from learn() because learn() counts a *use*: it bumps hitCount and
+   * weight on conflict, which is right for a viewer typing "gates" and wrong for
+   * the seed, which runs on every release. Using learn() here would inflate the
+   * curated aliases' stats a little more with each deploy, and §21 ranks
+   * matches on exactly those numbers.
+   */
+  async ensure(input: { slotId: string; alias: string }): Promise<void> {
+    const normalised = normaliseSlotName(input.alias)
+    if (normalised === '') return
+    await this.db
+      .insert(slotAliases)
+      .values({
+        slotId: input.slotId,
+        alias: input.alias.trim(),
+        normalised,
+        source: 'manual',
+        approved: true,
+        hitCount: 0,
+      })
+      .onConflictDoNothing({ target: [slotAliases.normalised, slotAliases.slotId] })
+  }
+
   async learn(input: {
     slotId: string
     alias: string
