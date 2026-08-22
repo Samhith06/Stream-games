@@ -99,6 +99,59 @@
   .grow { flex: 1; min-width: 0; }
   .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+  /* ── Collecting-phase chrome ──────────────────────────────────────────────
+   * Glass panels with a coloured top edge and a blurred colour bloom behind
+   * them. Everything here is drawn from the palette variables, so the
+   * tournament palette restyles it without a second stylesheet.
+   */
+  #topbar { position: absolute; left: 48px; right: 48px; top: 34px; height: 62px;
+            display: flex; align-items: center; justify-content: space-between; }
+
+  .wordmark { font-family: Sora, sans-serif; font-weight: 800; font-size: 30px;
+              letter-spacing: -.02em; color: var(--accent);
+              filter: drop-shadow(0 0 10px var(--accent)); }
+
+  .tabs { position: absolute; left: 50%; transform: translateX(-50%); display: flex; gap: 34px; }
+  .tab { font-family: 'JetBrains Mono', monospace; font-size: 20px; font-weight: 700;
+         text-transform: uppercase; letter-spacing: .12em; color: var(--muted);
+         opacity: .5; padding-bottom: 6px; border-bottom: 3px solid transparent; }
+  .tab.on { color: var(--accent); border-bottom-color: var(--accent); opacity: 1; }
+
+  .pill { display: flex; align-items: center; gap: 16px; padding: 10px 22px; border-radius: 999px;
+          background: var(--panel); backdrop-filter: blur(12px); border: 2px solid var(--border); }
+  .divider { width: 2px; height: 20px; background: var(--border); }
+
+  .card { position: relative; overflow: hidden; padding: 22px 26px; border-radius: 16px;
+          background: var(--panel); backdrop-filter: blur(16px);
+          border: 2px solid var(--border); border-top-width: 4px; }
+  /* The bloom sits behind the content and is what stops a flat panel reading as
+     a grey box over dark stream footage. */
+  .bloom { position: absolute; right: -30px; top: -30px; width: 130px; height: 130px;
+           border-radius: 50%; filter: blur(34px); opacity: .28; }
+
+  /* The queue only scrolls when it overflows — see renderQueue(). §19 allows the
+     one breathing LIVE dot and nothing else idle, and a list that cannot show
+     all of itself is conveying information rather than decorating. */
+  @keyframes scrollY { from { transform: translateY(0) } to { transform: translateY(-50%) } }
+  .queue { position: relative; overflow: hidden; height: 560px;
+           -webkit-mask-image: linear-gradient(to bottom, transparent, #000 7%, #000 93%, transparent);
+           mask-image: linear-gradient(to bottom, transparent, #000 7%, #000 93%, transparent); }
+  .queue-track { display: flex; flex-direction: column; gap: 10px; }
+  .queue-track.scrolling { animation: scrollY var(--scroll-duration, 30s) linear infinite; }
+
+  .entry { display: flex; align-items: center; gap: 14px; padding: 10px 12px; border-radius: 12px;
+           background: var(--panel); backdrop-filter: blur(10px); border: 2px solid var(--border); }
+  .entry.waiting { opacity: .68; }
+  .entry-name { font-size: 22px; font-weight: 700; }
+  .entry-who  { font-family: 'JetBrains Mono', monospace; font-size: 17px; font-weight: 500; color: var(--muted); }
+
+  .bar { height: 14px; border-radius: 999px; overflow: hidden;
+         background: var(--track); border: 2px solid var(--border); }
+  .bar-fill { height: 100%; border-radius: 999px; background: var(--primary);
+              transition: width .5s cubic-bezier(.16,1,.3,1); position: relative; }
+  .bar-fill::after { content: ''; position: absolute; inset: 0;
+                     background: linear-gradient(90deg, transparent, rgba(255,255,255,.28), transparent); }
+
   .hidden { display: none !important; }
 
   /* Takeover for the result reveal and the between-rounds bracket. */
@@ -108,11 +161,18 @@
 </head>
 <body>
 <div id="stage">
-  <!-- Status strip, top-left. Small, out of the way, always truthful. -->
-  <div class="panel enter" style="position:absolute;left:48px;top:40px;display:flex;align-items:center;gap:16px;padding:12px 22px;">
-    <div class="live-dot" id="dot"></div>
-    <span class="label" id="phase" style="color:var(--text)">Connecting</span>
-    <span class="mono" id="participants" style="font-size:22px;font-weight:700;color:var(--accent)"></span>
+  <!-- Top bar: identity on the left, phase in the middle, liveness on the right.
+       Kept to 62px so the centre of frame stays clear for the game (§19). -->
+  <div id="topbar">
+    <div class="wordmark">StreamArena</div>
+    <div class="tabs" id="tabs"></div>
+    <div class="pill">
+      <div class="live-dot" id="dot"></div>
+      <span class="label" id="phase" style="color:var(--loss);font-size:17px">Connecting</span>
+      <div class="divider"></div>
+      <span id="viewers-icon" style="display:flex;color:var(--primary)"></span>
+      <span class="mono" id="participants" style="font-size:21px;font-weight:700;color:var(--text)">—</span>
+    </div>
   </div>
 
   <div class="left"  id="left"></div>
@@ -133,6 +193,116 @@ let gameId = null
 
 const el = (id) => document.getElementById(id)
 
+/*
+ * Inline SVG rather than an icon font. The overlay is the one surface that is
+ * on stream, so it must not depend on Google Fonts resolving — a missing icon
+ * font renders the ligature name as literal text ("account_balance_wallet")
+ * across the broadcast.
+ */
+const ICON = {
+  wallet: '<svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0 0 4h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5"/><circle cx="16" cy="13" r="1.5" fill="currentColor" stroke="none"/></svg>',
+  target: '<svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="1" fill="currentColor"/></svg>',
+  viewers: '<svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3 19c0-3.3 2.7-5 6-5s6 1.7 6 5"/><path d="M16 5.2a3.2 3.2 0 0 1 0 5.6M17.5 14c2.1.5 3.5 2 3.5 5"/></svg>',
+  check: '<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5 9.5 18 20 6.5"/></svg>',
+  waiting: '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"/><path d="M12 7.5V12l3 2" stroke-linecap="round"/></svg>',
+  matching: '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>',
+}
+
+/** The three phases a viewer sees, so the overlay says where the hunt is. */
+const HUNT_TABS = [
+  ['collecting', 'Collecting'],
+  ['guessing', 'Guessing'],
+  ['opening', 'Opening'],
+  ['complete', 'Final Result'],
+]
+
+function renderTabs(phase) {
+  el('tabs').innerHTML = HUNT_TABS.map(
+    ([key, label]) => `<span class="tab ${key === phase ? 'on' : ''}">${label}</span>`,
+  ).join('')
+}
+
+/** A stat card: coloured top edge, matching bloom behind it, icon on the right. */
+function statCard(label, value, colour, icon, size) {
+  return `
+  <div class="card enter" style="border-top-color:${colour};margin-bottom:16px">
+    <div class="bloom" style="background:${colour}"></div>
+    <div style="position:relative;display:flex;align-items:flex-start;justify-content:space-between;gap:20px">
+      <div style="min-width:0">
+        <div class="label" style="margin-bottom:8px">${escapeHtml(label)}</div>
+        <div class="display" style="font-size:${size}px;color:${colour};line-height:1.05">${value}</div>
+      </div>
+      <span style="color:${colour};flex-shrink:0;filter:drop-shadow(0 0 6px ${colour})">${icon}</span>
+    </div>
+  </div>`
+}
+
+/**
+ * The requested-slots feed.
+ *
+ * Rebuilt only when the entries actually change. The overlay re-renders on
+ * every patch — a balance edit, a guess arriving — and rewriting this innerHTML
+ * restarts the CSS animation, so an untracked rebuild would make the list stutter
+ * back to the top several times a minute.
+ */
+let queueSignature = null
+
+function renderQueue(entries) {
+  const signature = entries.map((e) => `${e.slotName}|${e.requestedBy}|${e.status}`).join('~')
+  if (signature === queueSignature) return
+  queueSignature = signature
+
+  if (entries.length === 0) {
+    el('right').innerHTML = ''
+    return
+  }
+
+  const rows = entries.map((e) => {
+    const banked = e.status === 'collected' || e.status === 'opened'
+    // A red cross would read as "rejected". `queued` means the streamer simply
+    // has not played it yet, which is the normal state for most of a hunt.
+    const mark = banked
+      ? `<span style="color:var(--win);filter:drop-shadow(0 0 6px var(--win))">${ICON.check}</span>`
+      : e.status === 'pending'
+        ? `<span style="color:var(--gold)">${ICON.matching}</span>`
+        : `<span style="color:var(--muted)">${ICON.waiting}</span>`
+
+    return `
+      <div class="entry ${banked ? '' : 'waiting'}">
+        ${e.thumbnail
+          ? `<img class="thumb" src="${escapeHtml(e.thumbnail)}" alt="">`
+          : '<div class="thumb" style="background:var(--border)"></div>'}
+        <div class="grow">
+          <div class="entry-name truncate">${escapeHtml(e.slotName)}</div>
+          <div class="entry-who truncate">@${escapeHtml(e.requestedBy)}</div>
+        </div>
+        ${mark}
+      </div>`
+  })
+
+  // Rendered twice so the loop is seamless: the animation translates by -50%,
+  // which lands the copy exactly where the original started.
+  el('right').innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:0 6px 12px">
+      <span class="label">Requested slots</span>
+      <span class="mono" style="font-size:19px;color:var(--muted)">Queue: ${entries.length}</span>
+    </div>
+    <div class="queue"><div class="queue-track">${rows.join('')}${rows.join('')}</div></div>`
+
+  // Measured rather than estimated from a row count: the real height depends on
+  // fonts and wrapping, and guessing it makes the scroll speed drift as the
+  // queue grows. Speed is held constant (px/sec) so a long hunt does not race
+  // past unreadably — only the loop gets longer.
+  const track = el('right').querySelector('.queue-track')
+  const viewport = el('right').querySelector('.queue')
+  const contentHeight = track.scrollHeight / 2
+
+  if (contentHeight > viewport.clientHeight) {
+    track.style.setProperty('--scroll-duration', `${Math.round(contentHeight / 26)}s`)
+    track.classList.add('scrolling')
+  }
+}
+
 connect({
   url: `${location.origin.replace(/^http/, 'ws')}/ws/overlay/${token}`,
   onState: (next, frame) => {
@@ -144,14 +314,16 @@ connect({
   onCue: cue,
   onStatus: (status) => {
     el('dot').style.background = status === 'connected' ? 'var(--loss)' : 'var(--muted)'
-    if (status === 'ended') el('phase').textContent = 'Complete'
+    if (status === 'ended') el('phase').textContent = 'ENDED'
   },
 })
 
 function render() {
-  el('phase').textContent = String(state.phase ?? '').toUpperCase() || 'WAITING'
+  // The pill reads LIVE; the phase is named by the tabs, so it needn't repeat here.
+  el('phase').textContent = 'LIVE'
+  el('viewers-icon').innerHTML = ICON.viewers
   const people = state.participantCount ?? state.poolCount
-  el('participants').textContent = people ? `${people.toLocaleString()} playing` : ''
+  el('participants').textContent = people ? people.toLocaleString() : '—'
 
   if (gameId === 'slot-tournament') return renderTournament()
   renderHunt()
@@ -166,14 +338,16 @@ function renderHunt() {
 
   // §13 — break-even is the emotional centre of the game and should be the
   // largest number on the overlay during collection and guessing.
+  renderTabs(phase)
+
   el('left').innerHTML = `
-    ${stat('Starting balance', money(state.startBalance, currency), 'var(--text)', 40)}
+    ${statCard('Starting balance', money(state.startBalance, currency), 'var(--primary)', ICON.wallet, 40)}
     ${phase === 'collecting' || phase === 'guessing'
-      ? stat('Break-even per bonus', money(state.breakEvenPerBonus, currency), 'var(--gold)', 64)
-      : stat('Total won', money(state.won, currency), 'var(--primary)', 56)}
+      ? statCard('Break-even per bonus', money(state.breakEvenPerBonus, currency), 'var(--gold)', ICON.target, 56)
+      : statCard('Total won', money(state.won, currency), 'var(--primary)', ICON.wallet, 50)}
     ${phase === 'opening' || phase === 'complete'
-      ? stat('Profit / loss', signed(state.profit ?? 0, currency),
-             (state.profit ?? 0) >= 0 ? 'var(--win)' : 'var(--loss)', 48)
+      ? statCard('Profit / loss', signed(state.profit ?? 0, currency),
+                 (state.profit ?? 0) >= 0 ? 'var(--win)' : 'var(--loss)', ICON.target, 46)
       : ''}`
 
   if (phase === 'guessing') {
@@ -203,24 +377,12 @@ function renderHunt() {
           </div>`).join('')}
       </div>`
   } else {
-    const entries = (state.entries ?? []).slice(-7).reverse()
-    el('right').innerHTML = entries.length === 0 ? '' : `
-      <div class="panel enter" style="overflow:hidden">
-        <div class="label" style="padding:18px 18px 10px">Latest slots</div>
-        ${entries.map((e) => `
-          <div class="row">
-            ${e.thumbnail ? `<img class="thumb" src="${escapeHtml(e.thumbnail)}" alt="">`
-              : '<div class="thumb" style="background:var(--border)"></div>'}
-            <div class="grow" style="min-width:0">
-              <div class="truncate">${escapeHtml(e.slotName)}</div>
-              <div class="mono truncate" style="font-size:20px;font-weight:500;color:var(--muted)">
-                ${escapeHtml(e.requestedBy)}</div>
-            </div>
-            ${e.status === 'collected' || e.status === 'opened'
-              ? '<span style="color:var(--win);font-size:26px">✓</span>' : ''}
-          </div>`).join('')}
-      </div>`
+    // Newest first: a viewer who just typed !sr wants to see their slot arrive.
+    renderQueue([...(state.entries ?? [])].reverse())
   }
+
+  // The other phases own #right, so the queue must be rebuilt when we return.
+  if (phase !== 'collecting') queueSignature = null
 
   el('bottom').innerHTML = `
     <div class="panel" style="display:flex;align-items:center;justify-content:space-between;padding:24px 36px;">
@@ -233,9 +395,8 @@ function renderHunt() {
           </div>
         </div>
         <div style="flex:1;max-width:640px">
-          <div style="height:14px;background:var(--track);border-radius:999px;overflow:hidden;border:2px solid var(--border)">
-            <div style="height:100%;width:${target ? Math.min(100, (banked / target) * 100) : 0}%;
-                        background:var(--primary);border-radius:999px;transition:width .5s ease-out"></div>
+          <div class="bar">
+            <div class="bar-fill" style="width:${target ? Math.min(100, (banked / target) * 100) : 0}%"></div>
           </div>
         </div>
       </div>
