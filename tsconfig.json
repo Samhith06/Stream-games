@@ -23,6 +23,9 @@
       "path": "packages/games/slot-tournament"
     },
     {
+      "path": "packages/games/slot-bingo"
+    },
+    {
       "path": "packages/platform"
     },
     {
