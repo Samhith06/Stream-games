@@ -448,6 +448,8 @@ function battlesFields() {
       { k: 'sideGate', label: 'Who can declare a side?', type: 'segment',
         options: [['anyone','Anyone'],['followers','Followers'],['subscribers','Subs']] },
       { note: 'Anyone in chat can back a team, drawn or not. A declaration is permanent for the session — allegiance that can switch is not allegiance, and the reward at the end becomes a prize for correct timing. Sides lock at the halfway pick so nobody reads the scoreboard late and piles onto the winner.' },
+      { k: 'autoSideOnJoin', label: 'Put entrants on a side automatically', type: 'toggle',
+        hint: 'When someone enters the pool without having picked a side, assign them one. Off by default: an allegiance someone chose is the thing that makes the comeback matter. It also mutes the "they called Fortune and the coin said Chaos" callout for those viewers, since an assigned side was never their prediction.' },
     ]},
 
     { title: 'Which slots can be entered', icon: 'policy', rows: [

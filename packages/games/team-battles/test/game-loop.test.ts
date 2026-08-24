@@ -232,6 +232,132 @@ test('the coin overriding a declared side is flagged, not hidden', () => {
   )
 })
 
+// ─── autoSideOnJoin ─────────────────────────────────────────────────────────
+
+test('off by default, joining leaves you with no side', () => {
+  // §7 — nobody is auto-assigned unless the streamer asks for it.
+  const { state } = run([...poolOf(3)])
+  assert.equal(Object.keys(state.sides).length, 0)
+})
+
+test('on, a confirmed entrant is put on a side', () => {
+  const { state } = run([...poolOf(4)], { autoSideOnJoin: true })
+
+  assert.equal(Object.keys(state.sides).length, 4, 'everyone who joined has a side')
+  assert.ok(Object.values(state.sides).every((s) => s.auto), 'and it is marked as assigned')
+})
+
+test('an assigned side never overrides one the viewer chose', () => {
+  const { state } = run(
+    [sideCmd('p0', 'fortune'), ...poolOf(2)],
+    { autoSideOnJoin: true },
+  )
+
+  assert.equal(state.sides['u-p0']!.team, 'B', 'their own pick stands')
+  assert.equal(state.sides['u-p0']!.auto, false, 'and stays marked as chosen')
+})
+
+test('a join whose slot never resolves gets no side', () => {
+  // Their entry is dropped from the pool, so an allegiance to a session they
+  // are not in would be a lie on the crowd bar.
+  const { state } = run(
+    [
+      joinCmd('ghost', 'not a real slot'),
+      ev({
+        type: 'slot.resolved',
+        query: 'not a real slot',
+        then: { kind: 'pool', userId: 'u-ghost' },
+        match: null,
+        suggestions: [],
+      }),
+    ],
+    { autoSideOnJoin: true },
+  )
+
+  assert.equal(state.sides['u-ghost'], undefined)
+})
+
+test('assignment is seeded, so a replay produces the same crowd', () => {
+  const a = run([...poolOf(6)], { autoSideOnJoin: true }, 'same-seed')
+  const b = run([...poolOf(6)], { autoSideOnJoin: true }, 'same-seed')
+
+  assert.deepEqual(
+    Object.entries(a.state.sides).map(([id, s]) => [id, s.team]),
+    Object.entries(b.state.sides).map(([id, s]) => [id, s.team]),
+  )
+})
+
+test('an assigned side never fires the coin-betrayal callout', () => {
+  /*
+   * §6.4 is the point of this whole flag being tracked. The callout is only a
+   * betrayal if they picked a side; if everyone were auto-assigned it would
+   * fire on roughly half of all picks and stop meaning anything.
+   */
+  const { state } = run([...poolOf(4), control('pick.draw'), control('flip.run')], {
+    autoSideOnJoin: true,
+  })
+
+  const pick = state.picks[0]!
+  assert.ok(state.sides[pick.userId]?.auto, 'the fixture should have assigned them a side')
+  assert.equal(pick.declaredSide, null, 'which must not read as a prediction')
+
+  const projected = teamBattles.project(state) as Record<string, any>
+  assert.equal(projected.currentPick.allegianceOverridden, false)
+})
+
+test('a chosen side still fires it when the coin disagrees', () => {
+  // The other half: turning the flag on must not mute genuine declarations.
+  const events = [...poolOf(4)]
+  for (const n of ['p0', 'p1', 'p2', 'p3']) events.push(sideCmd(n, 'chaos'))
+  events.push(control('pick.draw'), control('flip.run'))
+
+  const { state } = run(events, { autoSideOnJoin: true })
+  const pick = state.picks[0]!
+
+  assert.equal(pick.declaredSide, 'A', 'their own call is on the record')
+  const projected = teamBattles.project(state) as Record<string, any>
+  assert.equal(projected.currentPick.allegianceOverridden, pick.team !== 'A')
+})
+
+test('nobody is assigned once sides have locked', () => {
+  const events: InternalEvent[] = [...poolOf(8)]
+  for (let i = 0; i < 4; i++) {
+    events.push(control('pick.draw'), control('flip.run'), result(100, 200))
+  }
+  // A genuinely new viewer, arriving after the lock.
+  events.push(joinCmd('latecomer', 'Late Slot'), resolvedFor('latecomer', 'late', 'Late Slot'))
+
+  const { state } = run(events, { autoSideOnJoin: true, maxPicks: 8 })
+
+  assert.equal(state.sidesLocked, true)
+  assert.equal(state.sides['u-latecomer'], undefined, 'the crowd is closed by then')
+})
+
+test('an assigned side can still be replaced by a real choice', () => {
+  /*
+   * The point of the auto flag cutting both ways. Being put on a team must not
+   * lock someone out of picking one — that would take the choice away from
+   * exactly the viewers who bothered to enter.
+   */
+  const { state, effects } = run([...poolOf(2), sideCmd('p0', 'fortune')], {
+    autoSideOnJoin: true,
+  })
+
+  assert.equal(state.sides['u-p0']!.team, 'B', 'their own call wins')
+  assert.equal(state.sides['u-p0']!.auto, false, 'and counts as chosen from then on')
+  assert.ok(
+    !chatTexts(effects).some((t) => t.includes('already with')),
+    'and they are not told off for it',
+  )
+
+  // But a second change is still refused — §7's actual rule.
+  const twice = run([...poolOf(2), sideCmd('p0', 'fortune'), sideCmd('p0', 'chaos')], {
+    autoSideOnJoin: true,
+  })
+  assert.equal(twice.state.sides['u-p0']!.team, 'B')
+  assert.ok(chatTexts(twice.effects).some((t) => t.includes('already with')))
+})
+
 // ─── §8.1 / §16: results ────────────────────────────────────────────────────
 
 test('the multiplier is computed from the two numbers entered', () => {

@@ -246,7 +246,16 @@ function declareSide(
     }
   }
 
-  if (state.sides[actor.userId]) {
+  /*
+   * A side the system handed out is not a decision, so it does not bind.
+   *
+   * §7's "no switching" exists to stop a viewer reading the scoreboard and
+   * changing their mind — it was never meant to lock someone out of choosing at
+   * all. With autoSideOnJoin on, refusing here would take the choice away from
+   * exactly the people who participate most: everyone who enters the pool would
+   * be stuck with a coin toss they never asked for.
+   */
+  if (state.sides[actor.userId] && !state.sides[actor.userId]!.auto) {
     const held = state.sides[actor.userId]!
     return {
       state,
@@ -277,7 +286,7 @@ function declareSide(
 
   const sides = {
     ...state.sides,
-    [actor.userId]: { username: actor.username, team, declaredAtSeq: ctx.seq },
+    [actor.userId]: { username: actor.username, team, declaredAtSeq: ctx.seq, auto: false },
   }
 
   return {
@@ -442,7 +451,40 @@ function handleSlotResolved(
     suggestions: [],
   }
 
-  return { state: { ...state, pool: replaceMember(state.pool, patched) }, effects: [] }
+  const next = { ...state, pool: replaceMember(state.pool, patched) }
+  return { state: autoSide(next, member.userId, member.username, ctx), effects: [] }
+}
+
+/**
+ * `autoSideOnJoin` — put a confirmed entrant on a side if they haven't picked.
+ *
+ * Applied here rather than at !join, because a viewer whose slot never resolves
+ * is removed from the pool again and should not be left holding an allegiance
+ * to a session they are not in.
+ *
+ * Never overrides a real declaration, never fires once sides are locked, and is
+ * seeded per user so a replay produces the same crowd split. The `sideGate`
+ * deliberately does not apply: it governs who may *choose* a side in chat, and
+ * this is the streamer choosing on behalf of everyone who entered.
+ */
+function autoSide(
+  state: BattleState,
+  userId: string,
+  username: string,
+  ctx: Ctx,
+): BattleState {
+  if (!ctx.config.autoSideOnJoin) return state
+  if (state.sidesLocked) return state
+  if (state.sides[userId]) return state
+
+  const team: TeamKey = ctx.rng(`autoside-${userId}`).coinFlip() ? 'A' : 'B'
+  return {
+    ...state,
+    sides: {
+      ...state.sides,
+      [userId]: { username, team, declaredAtSeq: ctx.seq, auto: true },
+    },
+  }
 }
 
 type Curation = { ok: true } | { ok: false; reason: string }
@@ -657,7 +699,11 @@ function drawPick(state: BattleState, ctx: Ctx): Result {
     slotName: drawn.slotName,
     thumbnail: drawn.thumbnail,
     team,
-    declaredSide: state.sides[drawn.userId]?.team ?? null,
+    // §6.4 — only a side they actually chose. An auto-assigned one was never
+    // a prediction, so the coin cannot contradict it.
+    declaredSide: state.sides[drawn.userId]?.auto === false
+      ? state.sides[drawn.userId]!.team
+      : null,
     source: seat.source,
     buyCostCents: null,
     payoutCents: null,

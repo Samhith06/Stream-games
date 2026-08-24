@@ -57,6 +57,15 @@ export interface SideDeclaration {
   username: string
   team: TeamKey
   declaredAtSeq: number
+  /**
+   * Assigned by `autoSideOnJoin` rather than chosen in chat.
+   *
+   * Tracked because §6.4's callout — "@slotgoblin declared FORTUNE, the coin
+   * says CHAOS" — is only a betrayal if they actually picked a side. Firing it
+   * for a side the system handed out would turn the best recurring beat in the
+   * game into noise on half of all picks.
+   */
+  auto: boolean
 }
 
 export interface Pick {
@@ -203,6 +212,20 @@ export const battlesConfigSchema = z
     reentryAfterPicks: z.number().int().min(1).max(20).nullable().default(null),
 
     sideGate: z.enum(['anyone', 'followers', 'subscribers']).default('anyone'),
+    /**
+     * Put everyone who enters the pool on a side, if they haven't picked one.
+     *
+     * Off by default, because §7 is deliberate that nobody is auto-assigned:
+     * allegiance is meant to be a choice a viewer lives with for two hours, and
+     * that is what makes a comeback feel like anything. Worth turning on for a
+     * channel where the crowd layer isn't catching on by itself — an assigned
+     * side is still better than no side at all for the people who join, never
+     * get drawn, and would otherwise have nothing to watch for.
+     *
+     * The assignment is seeded, so it replays identically, and it is marked
+     * auto so it never triggers the §6.4 callout.
+     */
+    autoSideOnJoin: z.boolean().default(false),
     /** null means "never lock". Defaults to the halfway pick at parse time. */
     sideLockAtPick: z.number().int().min(1).max(25).nullable().default(null),
 
