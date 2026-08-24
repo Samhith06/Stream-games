@@ -7,6 +7,7 @@
  * channels."
  */
 
+import { gatesFor } from './command-gates.js'
 import { DEFAULT_CHAT_POLICY } from '@streamarena/shared'
 import type { SessionMeta } from '@streamarena/platform'
 import type { WorkerContext } from './context.js'
@@ -52,10 +53,9 @@ export async function startSession(ctx: WorkerContext, sessionId: string): Promi
 
   // Per-game config can tighten a command's gate without the game knowing —
   // the Bonus Hunt setup screen's "Who can add slots?" is exactly this.
-  const srGate = (session.config as { srGate?: string }).srGate
-  if (srGate) meta.commandSettings.sr = { gate: srGate }
-  const joinGate = (session.config as { joinGate?: string }).joinGate
-  if (joinGate) meta.commandSettings.join = { gate: joinGate }
+  // See command-gates.ts: every gate a setup screen offers must be mapped
+  // there, or the control silently does nothing.
+  meta.commandSettings = gatesFor(session.config as Record<string, unknown>)
 
   await ctx.cache.putMeta(meta)
   await ctx.repos.sessions.markRunning(session.id)
