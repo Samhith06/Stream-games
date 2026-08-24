@@ -58,6 +58,9 @@
   </div>
 </main>
 
+<!-- Modal host, same contract as the session page: hidden until something
+     fills it, then switched to flex. -->
+<div id="dialog" class="hidden fixed inset-0 bg-background/80 backdrop-blur-sm z-50 items-center justify-center p-md"></div>
 <script type="module">
 import { api, attempt, toast, money, $, escapeHtml } from './app.js'
 import { mountShell, gameName } from './shell.js'
@@ -559,9 +562,43 @@ $('#form').addEventListener('submit', async (event) => {
     location.href = `/session?id=${session.id}`
   } catch (err) {
     button.disabled = false
-    if (err.code === 'session_running') {
-      toast('A session is already running — end it first.', 'error')
-      setTimeout(() => (location.href = `/session?id=${err.details.sessionId}`), 1200)
+    if (err.code !== 'session_running') return
+
+    /*
+     * One session per channel (§6.3), so this is a real conflict rather than a
+     * failure — but it used to flash a toast and then navigate to the running
+     * session on a timer. From the streamer's side that looks like Open Joining
+     * opened the wrong game: they clicked Team Battles and landed on a Bonus
+     * Hunt. Name the game that is in the way and let them choose.
+     */
+    const running = gameName(err.details?.gameId ?? '') || 'A session'
+    const sessionUrl = `/session?id=${err.details?.sessionId}`
+
+    const dialog = $('#dialog')
+    dialog.innerHTML = `
+      <div class="bg-surface-container rounded-xl border border-outline-variant shadow-xl max-w-md w-full p-xl relative overflow-hidden">
+        <div class="absolute top-0 left-0 w-full h-1 bg-gold"></div>
+        <h2 class="font-headline-md text-headline-md font-bold mb-base">${escapeHtml(running)} is still running</h2>
+        <p class="text-on-surface-variant mb-lg leading-relaxed">
+          Only one session can run on a channel at a time — chat commands would otherwise
+          have two possible meanings. End the ${escapeHtml(running)} session first, then come
+          back and open ${escapeHtml(gameName(gameId))}.
+        </p>
+        <div class="flex gap-md justify-end">
+          <button id="dlg-stay" class="px-md py-sm rounded-lg font-bold text-on-surface-variant
+            hover:bg-surface-variant transition-colors font-label-caps uppercase">Stay here</button>
+          <a href="${sessionUrl}" class="bg-primary text-on-primary px-md py-sm rounded-lg font-bold
+            font-label-caps uppercase flex items-center gap-xs">
+            Go to ${escapeHtml(running)}
+            <span class="material-symbols-outlined text-[18px]">arrow_forward</span></a>
+        </div>
+      </div>`
+
+    dialog.classList.remove('hidden')
+    dialog.classList.add('flex')
+    $('#dlg-stay').onclick = () => {
+      dialog.classList.add('hidden')
+      dialog.classList.remove('flex')
     }
   }
 })

@@ -136,7 +136,10 @@ export async function registerSessionRoutes(app: FastifyInstance, ctx: WebContex
         error: {
           code: 'session_running',
           message: 'A session is already running on this channel.',
-          details: { sessionId: existing.id },
+          // The game id travels with the error so the setup screen can say
+          // WHICH session is in the way. "A session is already running" plus a
+          // redirect reads as the wrong game having opened.
+          details: { sessionId: existing.id, gameId: existing.gameId },
         },
       })
     }
