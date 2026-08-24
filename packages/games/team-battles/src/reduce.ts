@@ -73,11 +73,20 @@ export function reduce(state: BattleState, event: InternalEvent, ctx: Ctx): Resu
       // §6.1 — the commitment is published once, at the start, so it can be
       // checked against the reveal at COMPLETE.
       if (ctx.config.publishFlipHash) {
+        /*
+         * Only advertise a command chat can actually use. With `sideGate` set
+         * to nobody this used to tell everyone to type !side and then reject
+         * them for it, which reads as a broken bot rather than a house rule.
+         */
+        const howToBack = state.canDeclareSide
+          ? `!side ${state.teams.A.name.toLowerCase()} / !side ${state.teams.B.name.toLowerCase()} ` +
+            `to pick who you're rooting for.`
+          : `The draw puts you on a team — nobody picks their own side this session.`
+
         effects.push(
           announce(
             `TEAM BATTLES — ${state.maxPicks} picks, ${state.teams.A.name} vs ${state.teams.B.name}. ` +
-              `!join <slot> to enter, !side ${state.teams.A.name.toLowerCase()} / ` +
-              `!side ${state.teams.B.name.toLowerCase()} to pick who you're rooting for. ` +
+              `!join <slot> to enter. ${howToBack} ` +
               `Flip sequence committed: ${state.flipSequenceHash}`,
           ),
         )

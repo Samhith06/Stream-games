@@ -629,6 +629,28 @@ test('!teams is throttled to one reply per window', () => {
   assert.equal(replies.length, 1, 'the answer is already on screen')
 })
 
+test('the opening message never advertises a command that is switched off', () => {
+  /*
+   * With sideGate at nobody it used to tell chat to type !side and then reject
+   * every one of them, which reads as a broken bot rather than a house rule.
+   */
+  const off = engine({ sideGate: 'nobody', autoSideOnJoin: true })
+  const offText = chatTexts(
+    off.apply(off.initialState(), ev({ type: 'session.started', actor: OWNER })).effects,
+  )[0]!
+
+  assert.ok(!offText.includes('!side'), '!side must not appear when nobody can use it')
+  assert.ok(offText.includes('!join'), 'but !join still has to be there')
+  assert.ok(offText.includes('puts you on a team'), 'and it should say how sides happen instead')
+
+  const on = engine({ sideGate: 'anyone' })
+  const onText = chatTexts(
+    on.apply(on.initialState(), ev({ type: 'session.started', actor: OWNER })).effects,
+  )[0]!
+
+  assert.ok(onText.includes('!side'), 'and it must still be advertised when it works')
+})
+
 test('the session opens with the flip commitment posted once', () => {
   const e = engine({ publishFlipHash: true })
   const folded = e.apply(e.initialState(), ev({ type: 'session.started', actor: OWNER }))

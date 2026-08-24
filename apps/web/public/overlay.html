@@ -951,10 +951,15 @@ function battlesJoiningView() {
           Type <span class="mono" style="color:var(--text)">!join &lt;slot&gt;</span> to enter
         </div>
         <div class="mono" style="font-size:24px;color:var(--muted)">
-          <span style="color:${teamColour('A')}">!side ${teamName('A').toLowerCase()}</span>
-          &nbsp;·&nbsp;
-          <span style="color:${teamColour('B')}">!side ${teamName('B').toLowerCase()}</span>
-          &nbsp;— pick who you're rooting for
+          ${
+            // §7 can run on assignment alone; don't put a dead command on stream.
+            state.canDeclareSide === false
+              ? 'The draw puts you on a team'
+              : `<span style="color:${teamColour('A')}">!side ${teamName('A').toLowerCase()}</span>
+                 &nbsp;·&nbsp;
+                 <span style="color:${teamColour('B')}">!side ${teamName('B').toLowerCase()}</span>
+                 &nbsp;— pick who you're rooting for`
+          }
         </div>
       </div>
       ${crest('B', 96)}

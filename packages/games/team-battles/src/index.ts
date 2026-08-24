@@ -116,6 +116,7 @@ export const teamBattles: GameModule<BattleState, BattlesConfig> = {
 
       sides: {},
       sidesLocked: false,
+      canDeclareSide: config.sideGate !== 'nobody',
       sideLockAtPick: sideLockPick(config),
 
       picks: [],
@@ -178,6 +179,7 @@ export const teamBattles: GameModule<BattleState, BattlesConfig> = {
       crowdA: crowd(state.sides, 'A'),
       crowdB: crowd(state.sides, 'B'),
       sidesLocked: state.sidesLocked,
+      canDeclareSide: state.canDeclareSide,
 
       pickNumber: state.picks.filter((p) => !p.vetoed).length,
       /** Per team, since the scoreboard shows "8 picks · 113.6x total" (§13). */

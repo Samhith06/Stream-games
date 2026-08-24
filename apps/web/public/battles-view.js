@@ -341,9 +341,12 @@ export function battlesJoining(state) {
       <p class="text-on-surface-variant mt-xs">
         in the pool · viewers type
         <span class="font-data-mono text-on-surface">!join &lt;slot&gt;</span>
-        to enter and
-        <span class="font-data-mono text-on-surface">!side</span>
-        to back a team
+        ${
+          // Never name a command this session has switched off.
+          state.canDeclareSide === false
+            ? 'to enter — the draw puts them on a team'
+            : `to enter and <span class="font-data-mono text-on-surface">!side</span> to back a team`
+        }
       </p>
     </div>
 

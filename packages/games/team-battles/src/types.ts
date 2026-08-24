@@ -136,6 +136,13 @@ export interface BattleState {
   /** userId → declaration. First one wins, permanently (§7). */
   sides: Record<string, SideDeclaration>
   sidesLocked: boolean
+  /**
+   * False when `sideGate` is `nobody` — §7's crowd layer runs on assignment
+   * alone. Carried on state because three surfaces advertise the command (the
+   * opening announcement, the dashboard, the overlay) and none of them should
+   * be telling chat to type something that is switched off.
+   */
+  canDeclareSide: boolean
   /** Resolved from config at init — §7's halfway default needs `maxPicks`. */
   sideLockAtPick: number | null
 
