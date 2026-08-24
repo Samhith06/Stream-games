@@ -83,7 +83,9 @@ const FIELDS =
     ? bonusHuntFields()
     : gameId === 'slot-bingo'
       ? bingoFields()
-      : tournamentFields()
+      : gameId === 'team-battles'
+        ? battlesFields()
+        : tournamentFields()
 render()
 
 function render() {
@@ -215,6 +217,19 @@ function row(f) {
   if (f.note) {
     return `<div class="md:col-span-2 bg-surface-container border-l-4 border-primary rounded-r-lg p-sm
                         text-[13px] text-on-surface-variant leading-relaxed">${escapeHtml(f.note)}</div>`
+  }
+  /*
+   * A caveat the streamer has to see while choosing, not afterwards — Team
+   * Battles §15 is explicit that the total-metric warning must sit next to the
+   * control rather than in documentation. Gold rather than red: this is a
+   * legitimate choice with a consequence, not an error.
+   */
+  if (f.warn) {
+    return `<div class="md:col-span-2 bg-gold/10 border-l-4 border-gold rounded-r-lg p-sm
+                        text-[13px] text-on-surface leading-relaxed flex gap-sm">
+        <span class="material-symbols-outlined text-gold text-[18px] shrink-0">warning</span>
+        <span>${escapeHtml(f.warn)}</span>
+      </div>`
   }
 
   const value = f.policy ? policy[f.k] : cfg[f.k]
@@ -392,9 +407,105 @@ function bingoSummary() {
   ]
 }
 
+function battlesFields() {
+  return [
+    { title: 'Format', icon: 'settings_suggest', rows: [
+      { k: 'maxPicks', label: 'Picks this session', type: 'segment',
+        options: [[10,'10'],[15,'15'],[20,'20']] },
+      { note: 'Declared before pick 1 and shown on the overlay throughout. A session that ends when the streamer decides can always be ended while their preferred team is ahead — a fixed count answers that before anyone makes the accusation.' },
+      { k: 'winMetric', label: 'Win metric', type: 'segment',
+        options: [['average','Average'],['total','Total'],['trimmed','Trimmed avg']] },
+      { warn: 'Total: because the coin decides team sizes, the larger team wins roughly 80% of the time — the scoreboard stops measuring the slots and reports the flips instead. Average is size-independent, which is why it is the default.' },
+      { k: 'drawMode', label: 'How teams are decided', type: 'segment',
+        options: [['coin','Coin flip'],['bag','Balanced bag']] },
+      { note: 'Balanced bag guarantees even teams by drawing from a fixed pool of chips. The cost is that the last pick of every session is predetermined — the most dramatic moment on the schedule, with no suspense left in it.' },
+      { k: 'maxSuddenDeath', label: 'Sudden-death picks', type: 'stepper', half: true,
+        hint: 'If the teams are close when the last scheduled pick lands, extra picks run automatically — up to this many, then the tiebreak decides. Set to 0 to turn it off.' },
+      { k: 'typicalBuy', label: 'Your typical buy', type: 'money', half: true,
+        hint: 'Not a game rule — it is what the projected spend is calculated from.' },
+    ]},
+
+    { title: 'Teams', icon: 'groups', rows: [
+      { k: 'teamPreset', label: 'Teams', type: 'segment',
+        options: [['chaos-fortune','Chaos / Fortune'],['blaze-frost','Blaze / Frost'],
+                  ['kraken-phoenix','Kraken / Phoenix'],['high-low','High / Low']] },
+      { note: 'Every preset is colour-checked: the two colours stay apart on a monochrome capture, on a badly calibrated monitor, and to a viewer with any form of colour blindness. The overlay is two colours telling you who is winning, so this is not decoration.' },
+    ]},
+
+    { title: 'Joining', icon: 'group_add', rows: [
+      { k: 'joinGate', label: 'Who can enter?', type: 'segment',
+        options: [['anyone','Anyone'],['followers','Followers'],['subscribers','Subs']] },
+      { k: 'joinWindowMs', label: 'Opening window', type: 'minutes', max: 30 },
+      { note: 'The window is the countdown before pick 1 only. Joining never closes after it — a viewer arriving at pick 9 of 15 can still enter and still be drawn, which is also what stops an empty pool from ending the session.' },
+      { k: 'uniqueSlots', label: 'One viewer per slot', type: 'toggle',
+        hint: 'First come, first served. The second request for a slot is rejected in chat rather than silently dropped.' },
+    ]},
+
+    { title: 'Picking a side', icon: 'diversity_3', rows: [
+      { k: 'sideGate', label: 'Who can declare a side?', type: 'segment',
+        options: [['anyone','Anyone'],['followers','Followers'],['subscribers','Subs']] },
+      { note: 'Anyone in chat can back a team, drawn or not. A declaration is permanent for the session — allegiance that can switch is not allegiance, and the reward at the end becomes a prize for correct timing. Sides lock at the halfway pick so nobody reads the scoreboard late and piles onto the winner.' },
+    ]},
+
+    { title: 'Which slots can be entered', icon: 'policy', rows: [
+      { note: 'A bad entry here is not a personal loss — the multiplier is banked to a team of a dozen people who had no say in it. These guards run at !join time, so a rejection reaches the viewer who typed it.' },
+      { k: 'minBuyX', label: 'Cheapest buy allowed', type: 'multi', half: true, step: 1 },
+      { k: 'maxBuyX', label: 'Priciest buy allowed', type: 'multi', half: true, step: 1 },
+      { note: 'Bounded both ways on purpose. A floor alone invites the opposite exploit — entering the most expensive buy available so you cost the streamer the most. With a range, per-pick exposure is known before the session starts, which is what makes the estimate honest.' },
+      { k: 'allowUnknownBuyCost', label: 'Allow slots with no buy price on file', type: 'toggle',
+        hint: 'On by default. Most of the catalog has no buy data yet, so turning this off will reject almost every entry unless you have curated your own list.' },
+    ]},
+
+    { title: 'Overlay & awards', icon: 'tv', rows: [
+      { k: 'publishFlipHash', label: 'Publish the flip commitment', type: 'toggle',
+        hint: 'Posts a fingerprint of the committed flip sequence at the start and the sequence itself at the end. Anyone who cares can check the flips were decided before the first !join landed.' },
+      { k: 'showAnchor', label: 'Award the Anchor', type: 'toggle',
+        hint: 'The lowest multiplier of the session, named with affection. Never a penalty.' },
+      { k: 'announceLeadChange', label: 'Announce lead changes in chat', type: 'toggle',
+        hint: 'Held behind the stream delay, so it cannot spoil a flip viewers are still watching.' },
+    ]},
+
+    { title: 'Bot & Chat', icon: 'smart_toy', rows: chatRows() },
+  ]
+}
+
+const TEAM_LABELS = {
+  'chaos-fortune': 'Chaos vs Fortune',
+  'blaze-frost': 'Blaze vs Frost',
+  'kraken-phoenix': 'Kraken vs Phoenix',
+  'high-low': 'High vs Low',
+}
+
+/**
+ * §9.1 — projected spend, recomputed live as the pick count moves.
+ *
+ * Fifteen picks at a €200 buy is €3,000 committed before the first name is
+ * drawn, and a streamer picking 20 because it sounds fun should watch that
+ * number double while they do it.
+ */
+function battlesSummary() {
+  const picks = cfg.maxPicks ?? 10
+  const buy = cfg.typicalBuy ?? 200
+  const currency = cfg.currency ?? 'EUR'
+  // ~4.5 minutes a pick, which is what the spec's session-length table implies.
+  const minutes = Math.round(picks * 4.5)
+
+  return [
+    ['Format', `${picks} picks · ${label(cfg.winMetric ?? 'average')}`],
+    ['Teams', TEAM_LABELS[cfg.teamPreset ?? 'chaos-fortune'] ?? 'Custom'],
+    ['Flips decided by', (cfg.drawMode ?? 'coin') === 'bag' ? 'Balanced bag' : 'Coin flip'],
+    ['Who can join', label(cfg.joinGate)],
+    ['Buys accepted', `${cfg.minBuyX ?? 50}x – ${cfg.maxBuyX ?? 500}x`],
+    ['Runs about', minutes >= 60 ? `${(minutes / 60).toFixed(1)} hours` : `${minutes} minutes`],
+    ['Projected spend', `≈ ${money(picks * buy, currency)}`],
+  ]
+}
+
 function summarise() {
   const rows = gameId === 'slot-bingo'
     ? bingoSummary()
+    : gameId === 'team-battles'
+    ? battlesSummary()
     : gameId === 'bonus-hunt'
     ? [
         ['Starting balance', `${cfg.currency ?? 'EUR'} ${(cfg.startBalance ?? 0).toLocaleString()}`],

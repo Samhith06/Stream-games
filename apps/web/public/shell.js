@@ -142,7 +142,8 @@ function startBanner(session) {
 }
 
 export const gameName = (id) =>
-  ({ 'bonus-hunt': 'Bonus Hunt', 'slot-tournament': 'Slot Tournament' })[id] ?? id
+  ({ 'bonus-hunt': 'Bonus Hunt', 'slot-tournament': 'Slot Tournament',
+     'slot-bingo': 'Slot Bingo', 'team-battles': 'Team Battles' })[id] ?? id
 
 /** Every dashboard page shares the same head. */
 export function pageHead(title) {

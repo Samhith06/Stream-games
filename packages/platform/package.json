@@ -26,6 +26,7 @@
     "ioredis": "^5.4.2",
     "pino": "^9.6.0",
     "zod": "^3.24.1",
-    "@streamarena/game-slot-bingo": "1.0.0"
+    "@streamarena/game-slot-bingo": "1.0.0",
+    "@streamarena/game-team-battles": "1.0.0"
   }
 }

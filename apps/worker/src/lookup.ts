@@ -26,6 +26,9 @@ export async function handleLookupJob(ctx: WorkerContext, job: LookupJob): Promi
           provider: resolution.slot.provider,
           thumbnail: resolution.slot.thumbnail,
           confidence: resolution.slot.confidence,
+          buyCostX: resolution.slot.buyCostX ?? null,
+          hasBonusBuy: resolution.slot.hasBonusBuy ?? null,
+          volatility: resolution.slot.volatility ?? null,
         }
       : null
 

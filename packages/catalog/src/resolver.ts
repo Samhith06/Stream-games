@@ -25,6 +25,33 @@ export interface SlotSuggestion {
   /** Slot art, shown on the overlay queue and in every results table. */
   thumbnail: string | null
   confidence: number
+  /** Curation facts — Team Battles §10. Null means the catalog doesn't know. */
+  buyCostX?: number | null
+  hasBonusBuy?: boolean | null
+  volatility?: string | null
+}
+
+/**
+ * The curation facts Team Battles §10 judges an entry on.
+ *
+ * `buy_cost_x` is a Postgres numeric, which the driver hands back as a string
+ * to avoid silently losing precision — so it is parsed here rather than being
+ * passed along to be coerced by whatever reads it next. A row that has never
+ * been curated yields nulls, and null means unknown throughout: §10's guards
+ * distinguish "this buy is too rich" from "we cannot tell what this buy costs".
+ */
+export function curationOf(row: {
+  buyCostX?: string | number | null
+  hasBonusBuy?: boolean | null
+  volatility?: string | null
+}) {
+  const raw = row.buyCostX
+  const buyCostX = raw === null || raw === undefined || raw === '' ? null : Number(raw)
+  return {
+    buyCostX: buyCostX !== null && Number.isFinite(buyCostX) ? buyCostX : null,
+    hasBonusBuy: row.hasBonusBuy ?? null,
+    volatility: row.volatility ?? null,
+  }
 }
 
 export type Resolution =
@@ -87,6 +114,7 @@ export class SlotCatalog {
           provider: exact.provider,
           thumbnail: exact.thumbnail,
           confidence: 1,
+          ...curationOf(exact),
         },
       }
     }
@@ -104,6 +132,7 @@ export class SlotCatalog {
           provider: aliased.slot.provider,
           thumbnail: aliased.slot.thumbnail,
           confidence: Math.min(1, aliased.alias.weight),
+          ...curationOf(aliased.slot),
         },
       }
     }
@@ -160,6 +189,7 @@ export class SlotCatalog {
       provider: row.provider,
       thumbnail: row.thumbnail,
       confidence: 1,
+      ...curationOf(row),
     }
   }
 
@@ -172,6 +202,7 @@ export class SlotCatalog {
           provider: row.provider,
           thumbnail: row.thumbnail,
           confidence: 1,
+          ...curationOf(row),
         }
       : null
   }
@@ -185,6 +216,7 @@ export class SlotCatalog {
       provider: r.provider,
       thumbnail: r.thumbnail,
       confidence: 1,
+      ...curationOf(r),
     }))
   }
 

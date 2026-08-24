@@ -70,6 +70,15 @@ export interface SlotResolvedEvent extends BaseEvent {
     provider: string | null
     thumbnail: string | null
     confidence: number
+    /*
+     * Curation facts — Team Battles §10. Null throughout means the catalog does
+     * not know, which is distinct from knowing the answer is no: a game that
+     * enforces buy-cost bounds has to be able to tell "this buy is 900x, too
+     * rich" apart from "we have no idea what this buy costs".
+     */
+    buyCostX?: number | null
+    hasBonusBuy?: boolean | null
+    volatility?: string | null
   } | null
   suggestions: {
     slotId: string

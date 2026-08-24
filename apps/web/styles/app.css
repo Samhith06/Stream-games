@@ -76,6 +76,78 @@
     --info: 250 204 21;
   }
 
+  /*
+   * Team Battles — §3, and this palette exists because of a measurement.
+   *
+   * Chaos violet #B44BFF and the app accent #A855F7 sit at 1.02:1 contrast with
+   * 0.033 worst-case colour-blind separation. They are the same colour to a
+   * viewer. So the brand accent steps back entirely here and the primary action
+   * colour becomes neutral: the "Run the flip" button must not wear either
+   * team's colour, or the streamer appears to be pressing a side.
+   *
+   * The two team colours live in --team-a / --team-b and are the ONLY saturated
+   * hues on the page. Everything else is greyscale by design.
+   */
+  [data-game="team-battles"] {
+    --primary: 228 228 235;
+    --primary-container: 168 168 184;
+    --primary-fixed: 245 245 250;
+    --primary-fixed-dim: 210 210 224;
+    --inverse-primary: 106 106 128;
+    --on-primary: 14 14 18;
+    --on-primary-container: 14 14 18;
+    --on-primary-fixed: 14 14 18;
+    --on-primary-fixed-variant: 51 51 60;
+
+    /* Secondary and tertiary are pulled to neutral for the same reason — a
+       cyan chip next to Chaos violet reads as a third team. */
+    --secondary: 154 154 176;
+    --secondary-container: 51 51 60;
+    --secondary-fixed: 210 210 224;
+    --secondary-fixed-dim: 154 154 176;
+    --on-secondary: 14 14 18;
+    --on-secondary-container: 245 245 250;
+    --on-secondary-fixed: 14 14 18;
+    --on-secondary-fixed-variant: 51 51 60;
+    --tertiary: 154 154 176;
+    --tertiary-container: 51 51 60;
+    --tertiary-fixed: 210 210 224;
+    --tertiary-fixed-dim: 154 154 176;
+    --on-tertiary: 14 14 18;
+    --on-tertiary-container: 245 245 250;
+    --on-tertiary-fixed: 14 14 18;
+    --on-tertiary-fixed-variant: 51 51 60;
+
+    --background: 19 19 22;
+    --surface: 19 19 22;
+    --surface-dim: 19 19 22;
+    --surface-container-lowest: 14 14 17;
+    --surface-container-low: 27 27 30;
+    --surface-container: 31 31 34;
+    --surface-container-high: 42 42 45;
+    --surface-container-highest: 53 52 56;
+    --surface-bright: 57 57 60;
+    --surface-variant: 53 52 56;
+    --surface-tint: 228 228 235;
+    --on-surface: 228 225 230;
+    --on-surface-variant: 207 194 214;
+    --outline: 152 141 159;
+    --outline-variant: 77 67 84;
+    --on-background: 228 225 230;
+    --inverse-surface: 228 225 230;
+    --inverse-on-surface: 48 48 51;
+
+    /* Meaning, not decoration — identical across every palette. */
+    --win: 45 212 191;
+    --loss: 255 77 106;
+    --gold: 255 197 61;
+    --error: 255 180 171;
+    --error-container: 147 0 10;
+    --on-error: 105 0 5;
+    --on-error-container: 255 218 214;
+    --info: 154 154 176;
+  }
+
   [data-game="slot-tournament"] {
     --primary: 99 102 241;
     --primary-container: 79 70 229;
@@ -181,4 +253,19 @@
   .live-dot {
     animation: breathing 2s ease-in-out infinite;
   }
+}
+
+/*
+ * Team colours — Team Battles §3.
+ *
+ * Declared as bare RGB channels like every other token so `bg-team-a/20` works,
+ * and set on :root rather than inside the [data-game] block because the session
+ * page overwrites them at runtime from the session's own config. Violet and
+ * gold are the defaults, chosen against colour-vision simulation: 2.80x
+ * greyscale separation, which is what keeps the two teams apart on a monochrome
+ * capture and on a phone in daylight.
+ */
+:root {
+  --team-a: 180 75 255;
+  --team-b: 255 197 61;
 }

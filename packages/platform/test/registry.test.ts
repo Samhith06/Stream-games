@@ -71,7 +71,15 @@ test('no two games claim the same command keyword', () => {
   // pool games, and it should mean the same thing in both.
   assert.deepEqual(
     clashes,
-    ['!join: slot-tournament and slot-bingo', '!enter: slot-tournament and slot-bingo'],
+    [
+      // Shared on purpose: Tournament, Bingo and Team Battles all use the same
+      // entry verb because §5 wants nothing new for a viewer to learn. It has
+      // to mean the same thing in all three.
+      '!join: slot-tournament and slot-bingo',
+      '!enter: slot-tournament and slot-bingo',
+      '!join: slot-tournament and team-battles',
+      '!enter: slot-tournament and team-battles',
+    ],
     'a new keyword clash appeared — either rename it or record it here on purpose',
   )
 })

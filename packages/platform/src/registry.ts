@@ -2,6 +2,7 @@ import { GameRegistry } from '@streamarena/core'
 import { bonusHunt } from '@streamarena/game-bonus-hunt'
 import { slotTournament } from '@streamarena/game-slot-tournament'
 import { slotBingo } from '@streamarena/game-slot-bingo'
+import { teamBattles } from '@streamarena/game-team-battles'
 
 /**
  * The one place games are wired in — §7.
@@ -10,7 +11,7 @@ import { slotBingo } from '@streamarena/game-slot-bingo'
  * than that, the GameModule contract is missing an abstraction.
  */
 export function buildRegistry(): GameRegistry {
-  return new GameRegistry().register(bonusHunt).register(slotTournament).register(slotBingo)
+  return new GameRegistry().register(bonusHunt).register(slotTournament).register(slotBingo).register(teamBattles)
 }
 
 /** Games announced but not yet playable, for the catalog's "Soon" cards. */

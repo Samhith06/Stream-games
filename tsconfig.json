@@ -26,6 +26,9 @@
       "path": "packages/games/slot-bingo"
     },
     {
+      "path": "packages/games/team-battles"
+    },
+    {
       "path": "packages/platform"
     },
     {

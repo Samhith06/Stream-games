@@ -61,7 +61,10 @@ export async function registerCatalogRoutes(app: FastifyInstance, ctx: WebContex
      * accordingly. The endpoint sends both ids in the payload either way, so
      * only the action name has to know the difference.
      */
-    const pooled = session?.gameId === 'slot-tournament' || session?.gameId === 'slot-bingo'
+    const pooled =
+      session?.gameId === 'slot-tournament' ||
+      session?.gameId === 'slot-bingo' ||
+      session?.gameId === 'team-battles'
 
     if (body.action === 'discard') {
       await ctx.queues.ingest.add('control', {

@@ -37,6 +37,7 @@
 import { api, control, connect, attempt, toast, money, signed, multiplier, countdown, copy, $, escapeHtml, slotTile, requireSessionId } from './app.js'
 import { mountShell } from './shell.js'
 import { bingoBoard, bingoJoining, bingoResult, lineRail } from './bingo-view.js'
+import { battlesJoining, battlesResult, ledger, pickCard, swingHero, teamColumns } from './battles-view.js'
 
 const sessionId = requireSessionId()
 const me = await mountShell({ active: '/session' })
@@ -58,6 +59,8 @@ if (detail.status === 'ended' || detail.status === 'abandoned') {
 
 const gameId = detail.gameId
 setGameTheme(gameId)
+// §3 — a streamer can run their own pair, so the two hues follow the session.
+window.setTeamColours?.(detail.config?.teamAColour, detail.config?.teamBColour)
 const currency = detail.config.currency ?? 'EUR'
 let state = detail.state ?? {}
 // Held in a variable rather than written straight to the DOM: onStatus can fire
@@ -92,7 +95,13 @@ setInterval(() => { const el = $('#timer'); if (el) tickTimer(el) }, 250)
 
 function draw() {
   $('#root').innerHTML =
-    gameId === 'bonus-hunt' ? hunt() : gameId === 'slot-bingo' ? bingo() : tournament()
+    gameId === 'bonus-hunt'
+      ? hunt()
+      : gameId === 'slot-bingo'
+        ? bingo()
+        : gameId === 'team-battles'
+          ? battles()
+          : tournament()
   drawActionBar()
   wire()
   paintConnection()
@@ -530,6 +539,74 @@ function bingo() {
   </div>`
 }
 
+// ─── Team Battles ───────────────────────────────────────────────────────────
+
+function battles() {
+  const phase = state.phase ?? 'joining'
+  const phases = ['Joining', 'Pick', 'Flip', 'Result']
+  const current =
+    { joining: 'Joining', pick: 'Pick', flip: 'Flip', buying: 'Flip',
+      result: 'Result', final: 'Result', complete: 'Result' }[phase] ?? 'Pick'
+
+  const showSwing = phase === 'flip' || phase === 'buying'
+
+  return `
+  ${header(phases, current)}
+
+  ${phase === 'joining' ? battlesJoining(state) : ''}
+  ${phase === 'complete' ? battlesResult(state) : ''}
+  ${state.currentPick ? pickCard(state) : ''}
+  ${showSwing ? swingHero(state) : ''}
+
+  ${teamColumns(state)}
+
+  <div class="grid grid-cols-1 xl:grid-cols-12 gap-lg">
+    <div class="xl:col-span-7 flex flex-col gap-lg">
+      ${unresolved()}
+      ${battlesMeta()}
+    </div>
+    <div class="xl:col-span-5">${ledger(state)}</div>
+  </div>`
+}
+
+/** The facts a streamer gets asked about mid-session and shouldn't have to guess. */
+function battlesMeta() {
+  const rows = [
+    ['Pick', `${state.pickNumber ?? 0} of ${state.maxPicks ?? 0}${
+      state.suddenDeathPicks ? ` (+${state.suddenDeathPicks} sudden death)` : ''
+    }`],
+    ['In the pool', String(state.entrantCount ?? 0)],
+    ['Backing a side', `${(state.crowdA ?? 0) + (state.crowdB ?? 0)}${state.sidesLocked ? ' · locked' : ''}`],
+    // §6.1 — the commitment, visible from the first second so the streamer can
+    // point at it when someone claims the flips are rigged.
+    ['Flip commitment', state.flipSequenceHash ?? '—'],
+  ]
+
+  if (state.bagRemaining) {
+    // §2 — a bag whose contents are secret while chat can count them anyway is
+    // the worst of both, so it is shown openly.
+    rows.push([
+      'Chips left',
+      `${state.teams?.A?.name ?? 'A'} ${state.bagRemaining.A} · ${state.teams?.B?.name ?? 'B'} ${state.bagRemaining.B}`,
+    ])
+  }
+
+  return `
+  <div class="bg-surface-container rounded-xl border border-outline-variant p-md">
+    <div class="grid grid-cols-2 md:grid-cols-3 gap-md">
+      ${rows
+        .map(
+          ([k, v]) => `
+        <div>
+          <div class="font-label-caps text-label-caps uppercase text-on-surface-variant">${escapeHtml(k)}</div>
+          <div class="font-data-mono text-[15px] mt-xs truncate">${escapeHtml(String(v))}</div>
+        </div>`,
+        )
+        .join('')}
+    </div>
+  </div>`
+}
+
 function tournament() {
   const phase = state.phase ?? 'joining'
   const phases = ['Joining', 'Draw', 'Voting', 'Playing', 'Results']
@@ -766,6 +843,95 @@ function tournamentResult() {
 
 // ─── action bar ─────────────────────────────────────────────────────────────
 
+/**
+ * Team Battles' controls, which are phase-gated rather than all-at-once.
+ *
+ * §6.2 is the reason: the veto disappears the moment the flip runs, and it has
+ * to disappear from the screen as well as from the state machine. A disabled
+ * button the streamer can see and hover invites "why can't I", where a control
+ * that is simply gone reads as a rule.
+ *
+ * Nothing here wears a team colour — §3.
+ */
+function battlesActionBar(phase) {
+  const pick = state.currentPick
+
+  if (phase === 'complete') return ''
+
+  if (phase === 'final') {
+    return `
+      <div class="text-on-surface-variant font-data-mono text-sm">
+        All ${state.maxPicks ?? 0} picks played. Ending announces the winner, the MVP and the Anchor.
+      </div>
+      <button data-tbend class="bg-primary text-on-primary px-xl py-sm rounded-lg font-bold uppercase font-label-caps">
+        End battle &amp; announce</button>`
+  }
+
+  // Drawn, not yet flipped — the only window where a veto is legal.
+  if (pick && !pick.team) {
+    return `
+      <div class="flex items-center gap-md min-w-0">
+        <div class="min-w-0">
+          <div class="font-bold truncate">@${escapeHtml(pick.username)}</div>
+          <div class="text-[12px] text-on-surface-variant truncate">${escapeHtml(pick.slotName ?? '')}</div>
+        </div>
+      </div>
+      <div class="flex items-center gap-sm">
+        <button data-tbveto class="border border-outline-variant hover:border-loss hover:text-loss
+          text-on-surface-variant px-md py-sm rounded-lg font-bold uppercase font-label-caps transition-colors">
+          Veto this slot</button>
+        <button data-tbflip class="bg-primary text-on-primary px-xl py-sm rounded-lg font-bold uppercase
+          font-label-caps flex items-center gap-sm hover:brightness-110 transition-all">
+          Run the flip <span class="material-symbols-outlined text-[18px]">shuffle</span></button>
+      </div>`
+  }
+
+  // Flipped — the team is locked and the only way out is the result.
+  if (pick) {
+    const team = state.teams?.[pick.team]
+    return `
+      <div class="flex items-center gap-md min-w-0">
+        <span class="font-label-caps text-label-caps uppercase px-sm py-xs rounded shrink-0
+                     ${pick.team === 'A' ? 'text-team-a bg-team-a/10 border border-team-a/40'
+                                         : 'text-team-b bg-team-b/10 border border-team-b/40'}">
+          ${escapeHtml(team?.name ?? '')}</span>
+        <div class="min-w-0">
+          <div class="font-bold truncate">@${escapeHtml(pick.username)}</div>
+          <div class="text-[12px] text-on-surface-variant truncate">${escapeHtml(pick.slotName ?? '')}</div>
+        </div>
+      </div>
+      <button data-tbresult class="bg-primary text-on-primary px-xl py-sm rounded-lg font-bold uppercase
+        font-label-caps flex items-center gap-sm hover:brightness-110 transition-all">
+        Enter result <span class="material-symbols-outlined text-[18px]">arrow_forward</span></button>`
+  }
+
+  // Between picks.
+  const waiting = state.waitingForEntries
+  return `
+    <div class="text-on-surface-variant font-data-mono text-sm flex items-center gap-sm">
+      ${
+        waiting
+          ? `<span class="material-symbols-outlined text-[18px] text-gold">hourglass_empty</span>
+             Pool is empty — waiting for !join`
+          : `${state.picksRemaining ?? 0} ${state.picksRemaining === 1 ? 'pick' : 'picks'} left`
+      }
+    </div>
+    <div class="flex items-center gap-sm">
+      ${
+        (state.picks ?? []).some((p) => p.multiplier !== null)
+          ? `<button data-tbrevert class="border border-outline-variant hover:border-gold hover:text-gold
+               text-on-surface-variant px-md py-sm rounded-lg font-bold uppercase font-label-caps transition-colors">
+               Revert last</button>`
+          : ''
+      }
+      <button data-tbdraw ${waiting ? 'disabled' : ''}
+        class="bg-primary text-on-primary px-xl py-sm rounded-lg font-bold uppercase font-label-caps
+               flex items-center gap-sm hover:brightness-110 transition-all
+               disabled:opacity-40 disabled:cursor-not-allowed">
+        Draw next entrant <span class="material-symbols-outlined text-[18px]">casino</span></button>
+    </div>`
+}
+
 function drawActionBar() {
   const bar = $('#actionbar')
   const phase = state.phase
@@ -842,6 +1008,8 @@ function drawActionBar() {
           font-label-caps flex items-center gap-sm hover:brightness-110 transition-all">
           Play next square <span class="material-symbols-outlined text-[18px]">play_arrow</span></button>
       </div>`
+  } else if (gameId === 'team-battles') {
+    html = battlesActionBar(phase)
   } else if (gameId === 'slot-tournament' && phase === 'joining') {
     html = `
       <div class="text-on-surface-variant font-data-mono text-sm">
@@ -894,6 +1062,28 @@ function wire() {
 
   // Entry actions
   on('[data-collect]', 'click', (e) => collectDialog(e.currentTarget.dataset.collect))
+  on('[data-tbdraw]', 'click', () => act('pick.draw'))
+  on('[data-tbflip]', 'click', () =>
+    confirmDialog(
+      'Run the flip?',
+      'The coin decides the team and the result is final — the veto is gone once this starts. The outcome was committed when the session was created; this only plays it.',
+      () => act('flip.run'),
+    ))
+  on('[data-tbveto]', 'click', () => vetoDialog())
+  on('[data-tbresult]', 'click', () => battlesResultDialog())
+  on('[data-tbrevert]', 'click', () =>
+    confirmDialog(
+      'Revert the last result?',
+      'The numbers are cleared so you can re-enter them. The flip is not re-rolled — same person, same team. The correction is logged and shown on the overlay.',
+      () => act('pick.revert'),
+    ))
+  on('[data-tbend]', 'click', () =>
+    confirmDialog(
+      'End the battle?',
+      'This announces the winning team, the MVP and the Anchor, and publishes the committed flip sequence so anyone can check it.',
+      () => act('battle.end'),
+    ))
+
   on('[data-bingodraw]', 'click', () => act('draw.run'))
   on('[data-bingopick]', 'click', () => act('square.pick'))
   on('[data-pickmanual]', 'click', (e) => act('square.pickManual', { squareId: e.currentTarget.dataset.pickmanual }))
@@ -1191,6 +1381,187 @@ function squareResultDialog(squareId) {
     if (e.key === 'Enter') $('#dlg-ok').click()
   }
   setTimeout(() => $('#sq-payout')?.focus(), 50)
+}
+
+/**
+ * The veto — §6.2, and the reason it asks for a reason.
+ *
+ * A veto is the streamer removing somebody's entry, so it goes on the record
+ * with a stated cause. "Curation happens before the coin, or it doesn't happen."
+ */
+function vetoDialog() {
+  const pick = state.currentPick
+  if (!pick) return
+
+  const dialog = $('#dialog')
+  dialog.innerHTML = `
+    <div class="bg-surface-container rounded-xl border border-outline-variant shadow-xl max-w-md w-full p-xl relative overflow-hidden">
+      <div class="absolute top-0 left-0 w-full h-1 bg-loss"></div>
+      <h2 class="font-display-lg-mobile text-display-lg-mobile font-bold mb-base">Veto this slot</h2>
+      <p class="text-on-surface-variant mb-lg">
+        ${escapeHtml(pick.slotName ?? 'This slot')} · @${escapeHtml(pick.username)}</p>
+
+      <label class="block font-label-caps text-label-caps text-on-surface-variant uppercase mb-xs">Reason</label>
+      <select id="veto-reason" class="input-dark w-full rounded-lg px-sm py-sm mb-md">
+        <option value="Not on this casino">Not on this casino</option>
+        <option value="Buy is outside the session bounds">Buy is outside the session bounds</option>
+        <option value="Troll entry">Troll entry</option>
+        <option value="Manual override">Manual override</option>
+      </select>
+
+      <label class="flex items-center gap-sm mb-lg cursor-pointer">
+        <input id="veto-remove" type="checkbox" class="accent-primary w-4 h-4">
+        <span class="text-[14px]">Remove them from the pool as well</span>
+      </label>
+
+      <p class="text-[12px] text-on-surface-variant/70 mb-lg leading-relaxed">
+        This uses up pick ${(pick.index ?? 0) + 1} and its committed flip. The sequence is not reshuffled —
+        the next entrant takes the next flip, whoever they turn out to be.
+      </p>
+
+      <div class="flex gap-md justify-end">
+        <button id="dlg-cancel" class="px-md py-sm rounded-lg font-bold text-on-surface-variant
+          hover:bg-surface-variant transition-colors font-label-caps uppercase">Cancel</button>
+        <button id="dlg-ok" class="bg-loss text-on-primary px-md py-sm rounded-lg font-bold font-label-caps uppercase">
+          Veto</button>
+      </div>
+    </div>`
+
+  dialog.classList.remove('hidden')
+  dialog.classList.add('flex')
+
+  const close = () => {
+    dialog.classList.add('hidden')
+    dialog.classList.remove('flex')
+  }
+
+  $('#dlg-cancel').onclick = close
+  $('#dlg-ok').onclick = async () => {
+    await act('pick.veto', {
+      reason: $('#veto-reason').value,
+      removeFromPool: $('#veto-remove').checked,
+    })
+    close()
+  }
+}
+
+/**
+ * Cost and payout — §8.1.
+ *
+ * The multiplier is computed as you type rather than entered, and the panel
+ * also answers the question the streamer actually cares about: does this take
+ * the lead? The swing figure is on screen while they are loading the bonus, so
+ * showing whether the number they just typed clears it costs nothing and is the
+ * whole point of §9.3.
+ */
+function battlesResultDialog() {
+  const pick = state.currentPick
+  if (!pick) return
+
+  const team = state.teams?.[pick.team]
+  const isTrailing = state.swingTeam === pick.team
+  const required = state.swing ?? 0
+  const suggested = detail.config?.typicalBuy || ''
+
+  const dialog = $('#dialog')
+  dialog.innerHTML = `
+    <div class="bg-surface-container rounded-xl border border-outline-variant shadow-xl max-w-md w-full p-xl relative overflow-hidden">
+      <div class="absolute top-0 left-0 w-full h-1 ${pick.team === 'A' ? 'bg-team-a' : 'bg-team-b'}"></div>
+      <h2 class="font-display-lg-mobile text-display-lg-mobile font-bold mb-xs">
+        @${escapeHtml(pick.username)}</h2>
+      <p class="text-on-surface-variant mb-lg">
+        ${escapeHtml(pick.slotName ?? 'Slot')} · banking to
+        <span class="${pick.team === 'A' ? 'text-team-a' : 'text-team-b'} font-bold">${escapeHtml(
+          team?.name ?? '',
+        )}</span></p>
+
+      <div class="grid grid-cols-2 gap-md mb-lg">
+        <div>
+          <label class="block font-label-caps text-label-caps text-on-surface-variant uppercase mb-xs">Buy cost</label>
+          <input id="tb-buy" type="number" step="0.01" min="0.01" value="${escapeHtml(String(suggested))}"
+                 class="input-dark w-full rounded-lg px-sm py-xs font-data-mono text-[18px]" autocomplete="off">
+        </div>
+        <div>
+          <label class="block font-label-caps text-label-caps text-on-surface-variant uppercase mb-xs">Payout</label>
+          <input id="tb-payout" type="number" step="0.01" min="0" value=""
+                 class="input-dark w-full rounded-lg px-sm py-xs font-data-mono text-[18px]" autocomplete="off">
+        </div>
+      </div>
+
+      <div class="bg-surface-container-low rounded-lg border border-outline-variant/40 p-md mb-lg">
+        <div class="flex items-center justify-between">
+          <span class="font-label-caps text-label-caps text-on-surface-variant uppercase">Multiplier</span>
+          <span id="tb-multi" class="font-data-mono text-[26px] text-on-surface-variant">—</span>
+        </div>
+        <div id="tb-verdict" class="text-[13px] text-on-surface-variant/70 mt-xs">
+          ${
+            isTrailing && required > 0
+              ? `${escapeHtml((team?.name ?? '').toUpperCase())} need ${multiplier(required)} to take the lead`
+              : 'Extends the lead'
+          }
+        </div>
+      </div>
+
+      <div class="flex gap-md justify-end">
+        <button id="dlg-cancel" class="px-md py-sm rounded-lg font-bold text-on-surface-variant
+          hover:bg-surface-variant transition-colors font-label-caps uppercase">Cancel</button>
+        <button id="dlg-ok" class="bg-primary text-on-primary px-md py-sm rounded-lg font-bold font-label-caps uppercase">
+          Bank it</button>
+      </div>
+    </div>`
+
+  dialog.classList.remove('hidden')
+  dialog.classList.add('flex')
+
+  const paint = () => {
+    const buy = Number($('#tb-buy').value)
+    const payout = Number($('#tb-payout').value)
+    const el = $('#tb-multi')
+    const verdict = $('#tb-verdict')
+
+    if (!Number.isFinite(buy) || buy <= 0 || !Number.isFinite(payout) || payout < 0) {
+      el.textContent = '—'
+      el.className = 'font-data-mono text-[26px] text-on-surface-variant'
+      return
+    }
+
+    const x = Math.round((payout / buy) * 100) / 100
+    el.textContent = multiplier(x)
+    el.className =
+      'font-data-mono text-[26px] ' + (x >= 1 ? 'text-win' : 'text-loss')
+
+    if (isTrailing && required > 0) {
+      verdict.textContent =
+        x >= required
+          ? `Takes the lead for ${team?.name ?? ''}`
+          : `${multiplier(required - x)} short of the lead`
+      verdict.className = `text-[13px] mt-xs ${x >= required ? 'text-win' : 'text-on-surface-variant/70'}`
+    }
+  }
+
+  const close = () => {
+    dialog.classList.add('hidden')
+    dialog.classList.remove('flex')
+  }
+
+  $('#tb-buy').oninput = paint
+  $('#tb-payout').oninput = paint
+  $('#dlg-cancel').onclick = close
+  $('#dlg-ok').onclick = async () => {
+    const buyCost = Number($('#tb-buy').value)
+    const payout = Number($('#tb-payout').value)
+    // §8.1 — buy cost must exceed zero. A payout of zero is valid and common.
+    if (!Number.isFinite(buyCost) || buyCost <= 0) return toast('Buy cost must be more than zero', 'error')
+    if (!Number.isFinite(payout) || payout < 0) return toast('Enter the payout — zero is fine', 'error')
+
+    await act('pick.result', { buyCost, payout })
+    close()
+  }
+
+  $('#tb-payout').onkeydown = (e) => {
+    if (e.key === 'Enter') $('#dlg-ok').click()
+  }
+  setTimeout(() => $('#tb-payout')?.focus(), 50)
 }
 
 function collectDialog(entryId) {

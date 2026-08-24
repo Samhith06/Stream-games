@@ -148,6 +148,17 @@ export const slots = pgTable(
     rtp: numeric('rtp', { precision: 5, scale: 2 }),
     maxWin: integer('max_win'),
     volatility: text('volatility'),
+    /**
+     * Buy cost as a multiple of bet — Team Battles §10.
+     *
+     * Null means unknown, which is the common case: the imported catalog does
+     * not carry buy data. The join guard treats unknown as its own outcome
+     * rather than as pass or fail, so a session with bounds set never silently
+     * accepts a slot it could not check.
+     */
+    buyCostX: numeric('buy_cost_x', { precision: 8, scale: 2 }),
+    /** Tri-state. Null is unknown, not false. */
+    hasBonusBuy: boolean('has_bonus_buy'),
     thumbnail: text('thumbnail'),
     isCustom: boolean('is_custom').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

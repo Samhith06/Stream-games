@@ -67,6 +67,11 @@ export default {
         'win': 'rgb(var(--win) / <alpha-value>)',
         'loss': 'rgb(var(--loss) / <alpha-value>)',
         'gold': 'rgb(var(--gold) / <alpha-value>)',
+        // Team Battles §3 — the only saturated hues on that game's pages. The
+        // brand accent is suppressed there because Chaos violet and #A855F7 are
+        // the same colour to a viewer.
+        'team-a': 'rgb(var(--team-a) / <alpha-value>)',
+        'team-b': 'rgb(var(--team-b) / <alpha-value>)',
         'error': 'rgb(var(--error) / <alpha-value>)',
         'error-container': 'rgb(var(--error-container) / <alpha-value>)',
         'on-error': 'rgb(var(--on-error) / <alpha-value>)',

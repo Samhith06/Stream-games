@@ -42,6 +42,8 @@ const currency = detail.config?.currency ?? 'EUR'
 if (detail.status === 'running') location.href = `/session?id=${sessionId}`
 
 setGameTheme(detail.gameId)
+// §3 — a streamer can run their own pair, so the two hues follow the session.
+window.setTeamColours?.(detail.config?.teamAColour, detail.config?.teamBColour)
 
 let analytics = null
 let state = detail.state ?? {}

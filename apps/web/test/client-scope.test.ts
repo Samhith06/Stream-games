@@ -38,7 +38,7 @@ const PAGES = [
 ]
 
 /** Plain modules, which have no <script> wrapper to unpack. */
-const MODULES = ['bingo-view.js']
+const MODULES = ['bingo-view.js', 'battles-view.js']
 
 function moduleBody(file: string): string {
   const source = readFileSync(join(PUBLIC_DIR, file), 'utf8')
