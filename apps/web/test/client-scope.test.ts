@@ -171,19 +171,56 @@ test('no top-level call runs before the state it touches is declared', () => {
 
     const functions = topLevelFunctions(moduleBody(page))
 
+    /*
+     * Everything a top-level call can reach, following calls transitively.
+     *
+     * Checking only the called function's own body is not enough, and it let a
+     * real bug ship: setup.html's `render()` reached a later-declared const
+     * three calls down, through summarise() -> battlesSummary(). The module
+     * threw before its submit listener attached, the button fell back to a
+     * native form GET, and choosing Team Battles silently reloaded the page as
+     * Bonus Hunt. A guard that stops at depth one reports green on exactly that.
+     */
+    const reachableFrom = (entry) => {
+      const seen = new Set()
+      const queue = [entry]
+      while (queue.length > 0) {
+        const name = queue.pop()
+        if (seen.has(name)) continue
+        // `wire()` is this codebase's handler-registration function by
+        // convention: everything it names runs on a click, long after the
+        // module has finished evaluating. Descending into it would flag every
+        // dialog helper as a dead-zone read, which is noise, not a finding.
+        if (name === 'wire') continue
+        const body = functions.get(name)
+        if (!body) continue
+        seen.add(name)
+        for (const m of body.matchAll(/\b([A-Za-z_$][\w$]*)\s*\(/g)) {
+          if (!seen.has(m[1])) queue.push(m[1])
+        }
+      }
+      return seen
+    }
+
     for (const call of calls) {
-      const source = functions.get(call.name)
-      if (!source) continue
+      if (!functions.has(call.name)) continue
+
+      const bodies = [...reachableFrom(call.name)].map((name) => ({
+        name,
+        source: functions.get(name),
+      }))
 
       for (const [name, line] of declaredAt) {
         if (line <= call.line) continue
-        // Referenced inside a function that runs before the declaration is
-        // reached: the read or write hits the temporal dead zone.
-        if (new RegExp(`\\b${name}\\b`).test(source)) {
-          problems.push(
-            `${page}: ${call.name}() on line ${call.line + 1} uses "${name}", declared on line ${line + 1}`,
-          )
-        }
+        const hit = bodies.find((b) => new RegExp(`\\b${name}\\b`).test(b.source))
+        if (!hit) continue
+
+        // Reached before the declaration is evaluated: the read hits the
+        // temporal dead zone and takes the whole module down with it.
+        const via = hit.name === call.name ? '' : ` (via ${hit.name}())`
+        problems.push(
+          `${page}: ${call.name}() on line ${call.line + 1}${via} uses "${name}", declared on line ${line + 1}`,
+        )
       }
     }
   }

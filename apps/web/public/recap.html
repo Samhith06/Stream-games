@@ -215,8 +215,17 @@ function unreplayable(message) {
   </div>`
 }
 
-const bonusLabel = (type) =>
-  ({ regular: 'Regular bonus', super: 'Super bonus', five_scatter: '5 scatter' })[type] ?? type
+/*
+ * A declaration, not a const arrow: render() runs at the top of this module and
+ * reaches this through slots(), so a const down here is still in its temporal
+ * dead zone and takes the whole page down. It only fired on a recap whose
+ * entries carried a bonus type, which is why it went unnoticed.
+ */
+function bonusLabel(type) {
+  return (
+    { regular: 'Regular bonus', super: 'Super bonus', five_scatter: '5 scatter' }[type] ?? type
+  )
+}
 
 function when(iso) {
   if (!iso) return '—'

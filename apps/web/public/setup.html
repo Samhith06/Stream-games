@@ -472,11 +472,25 @@ function battlesFields() {
   ]
 }
 
-const TEAM_LABELS = {
-  'chaos-fortune': 'Chaos vs Fortune',
-  'blaze-frost': 'Blaze vs Frost',
-  'kraken-phoenix': 'Kraken vs Phoenix',
-  'high-low': 'High vs Low',
+/*
+ * A function, not a const object.
+ *
+ * `render()` runs near the top of this module and reaches this through
+ * summarise() -> battlesSummary(). A `const` declared further down is still in
+ * its temporal dead zone at that point, so the module threw before the submit
+ * listener was attached — and the Open Joining button fell back to a native
+ * form GET, which drops the ?game query and reloads the setup screen as Bonus
+ * Hunt. Function declarations hoist, so this cannot happen again.
+ */
+function teamLabel(preset) {
+  return (
+    {
+      'chaos-fortune': 'Chaos vs Fortune',
+      'blaze-frost': 'Blaze vs Frost',
+      'kraken-phoenix': 'Kraken vs Phoenix',
+      'high-low': 'High vs Low',
+    }[preset] ?? 'Custom'
+  )
 }
 
 /**
@@ -495,7 +509,7 @@ function battlesSummary() {
 
   return [
     ['Format', `${picks} picks · ${label(cfg.winMetric ?? 'average')}`],
-    ['Teams', TEAM_LABELS[cfg.teamPreset ?? 'chaos-fortune'] ?? 'Custom'],
+    ['Teams', teamLabel(cfg.teamPreset ?? 'chaos-fortune')],
     ['Flips decided by', (cfg.drawMode ?? 'coin') === 'bag' ? 'Balanced bag' : 'Coin flip'],
     ['Who can join', label(cfg.joinGate)],
     ['Buys accepted', `${cfg.minBuyX ?? 50}x – ${cfg.maxBuyX ?? 500}x`],
