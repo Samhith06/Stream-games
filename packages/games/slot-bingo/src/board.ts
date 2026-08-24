@@ -9,7 +9,7 @@
 import type { Rng } from '@streamarena/core'
 import type { Line, Square, SquareTier } from './types.js'
 
-const COLUMNS = 'ABCDE'
+export const COLUMNS = 'ABCDE'
 
 /** 'C3' — column letter, row number. Stable, and what chat will say out loud. */
 export function squareId(row: number, col: number): string {

@@ -13,7 +13,7 @@
  *      that already exists rather than raising.
  */
 
-import { and, asc, desc, eq, gt, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, inArray, sql } from 'drizzle-orm'
 import type { InternalEvent } from '@streamarena/core'
 import type { Database } from '../client.js'
 import { gameSessions, sessionEvents, sessionSnapshots } from '../schema.js'
@@ -104,7 +104,33 @@ export class EventRepository {
       .limit(limit)
   }
 
-  async count(sessionId: string): Promise<number> {
+/**
+   * When each of these sessions last did anything.
+   *
+   * The stale sweep needs activity, not age, and the log already is the record
+   * of activity — a `last_activity_at` column would mean an extra write on
+   * every webhook to answer a question asked twice an hour.
+   *
+   * `DISTINCT ON` with a descending seq lets Postgres seek the tail of
+   * `session_events_replay_idx` per session rather than aggregating every row a
+   * long session has accumulated.
+   */
+  async lastActivityAt(sessionIds: string[]): Promise<Map<string, Date>> {
+    if (sessionIds.length === 0) return new Map()
+
+    const rows = await this.db
+      .selectDistinctOn([sessionEvents.sessionId], {
+        sessionId: sessionEvents.sessionId,
+        createdAt: sessionEvents.createdAt,
+      })
+      .from(sessionEvents)
+      .where(inArray(sessionEvents.sessionId, sessionIds))
+      .orderBy(sessionEvents.sessionId, desc(sessionEvents.seq))
+
+    return new Map(rows.map((row) => [row.sessionId, row.createdAt]))
+  }
+
+    async count(sessionId: string): Promise<number> {
     const [row] = await this.db
       .select({ n: sql<number>`count(*)::int` })
       .from(sessionEvents)

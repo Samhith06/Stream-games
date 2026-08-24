@@ -32,6 +32,7 @@ import {
 import {
   buildLines,
   buildSquares,
+  COLUMNS,
   commitPickOrder,
   lineCountFor,
   squareId,
@@ -360,6 +361,8 @@ function handleControl(
         state: { ...state, reservedUserIds: state.reservedUserIds.filter((id) => id !== p.userId) },
         effects: [],
       }
+    case 'pool.resolve':
+      return resolvePoolSlot(state, p)
     case 'pool.remove':
       return {
         state: {
@@ -389,6 +392,42 @@ function handleControl(
       return { state: { ...state, phase: 'complete' }, effects: [end('abandoned')] }
     default:
       return { state, effects: [] }
+  }
+}
+
+/**
+ * The streamer overrides a slot the catalog could not match (§20).
+ *
+ * It patches the square as well as the pool, because after the draw the square
+ * is where the slot actually lives — and a viewer holding a square with no slot
+ * on it is a square that cannot be played at all.
+ */
+function resolvePoolSlot(state: BingoState, p: Record<string, unknown>): Result {
+  const userId = String(p.userId ?? '')
+  const slotId = p.slotId ? String(p.slotId) : null
+  if (!userId || !slotId) return { state, effects: [] }
+
+  const slotName = p.slotName ? String(p.slotName) : null
+  const provider = p.provider ? String(p.provider) : null
+  const thumbnail = p.thumbnail ? String(p.thumbnail) : null
+
+  const patchMember = (m: PoolMember): PoolMember =>
+    m.userId === userId ? { ...m, slotId, slotName, provider, thumbnail, suggestions: [] } : m
+
+  return {
+    state: {
+      ...state,
+      pool: state.pool.map(patchMember),
+      standby: state.standby.map(patchMember),
+      squares: state.squares.map((square) =>
+        // Only an unplayed square: rewriting the slot under a settled attempt
+        // would rewrite what chat watched happen.
+        square.userId === userId && square.status !== 'settled'
+          ? { ...square, slotId, slotName, thumbnail }
+          : square,
+      ),
+    },
+    effects: [],
   }
 }
 
@@ -968,7 +1007,15 @@ export function lineLabel(id: string): string {
   if (id === 'diagB') return 'Diagonal ↙'
   const match = id.match(/^(row|col)(\d+)$/)
   if (!match) return id
-  return `${match[1] === 'row' ? 'Row' : 'Column'} ${match[2]}`
+
+  /*
+   * Columns are named by their letter, not their index. Every square on screen
+   * is labelled A5, C3, E1 — calling that square's column "Column 1" asks the
+   * viewer to translate mid-stream, and the rail sits right next to a line that
+   * says "Need A5".
+   */
+  const n = Number(match[2])
+  return match[1] === 'row' ? `Row ${n}` : `Column ${COLUMNS[n - 1] ?? n}`
 }
 
 export { buildLines, buildSquares }

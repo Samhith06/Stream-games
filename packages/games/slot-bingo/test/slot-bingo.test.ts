@@ -19,6 +19,7 @@ import {
   unlockSchedule,
 } from '../src/board.ts'
 import { bingoConfigSchema } from '../src/types.ts'
+import { lineLabel } from '../dist/index.js'
 
 // ─── geometry ───────────────────────────────────────────────────────────────
 
@@ -134,6 +135,19 @@ test('tiers land on the right side of their thresholds', () => {
   assert.equal(tierFor(49.99, 1, 50), 'green')
   assert.equal(tierFor(50, 1, 50), 'gold', 'at the threshold is gold')
   assert.equal(tierFor(0, 1, 50), 'red', 'a zero payout is a red, and common')
+})
+
+// ─── line labels ────────────────────────────────────────────────────────────
+
+test('a line is named the way its squares are labelled', () => {
+  // The rail prints the label next to "Need A5". Naming that line "Column 1"
+  // makes the viewer translate between two coordinate systems mid-stream.
+  assert.equal(lineLabel('col1'), 'Column A')
+  assert.equal(lineLabel('col3'), 'Column C')
+  assert.equal(lineLabel('col5'), 'Column E')
+  assert.equal(lineLabel('row3'), 'Row 3', 'rows are already numbered like the ids')
+  assert.equal(lineLabel('diagA'), 'Diagonal ↘')
+  assert.equal(lineLabel('diagB'), 'Diagonal ↙')
 })
 
 // ─── config ─────────────────────────────────────────────────────────────────

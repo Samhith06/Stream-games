@@ -59,7 +59,7 @@
 </main>
 
 <script type="module">
-import { api, attempt, toast, $, escapeHtml } from './app.js'
+import { api, attempt, toast, money, $, escapeHtml } from './app.js'
 import { mountShell, gameName } from './shell.js'
 
 const gameId = new URLSearchParams(location.search).get('game') ?? 'bonus-hunt'
@@ -78,7 +78,12 @@ const saved = await api(`/api/games/${gameId}/config`)
 const cfg = { ...saved.config }
 const policy = { ...saved.chatPolicy }
 
-const FIELDS = gameId === 'bonus-hunt' ? bonusHuntFields() : tournamentFields()
+const FIELDS =
+  gameId === 'bonus-hunt'
+    ? bonusHuntFields()
+    : gameId === 'slot-bingo'
+      ? bingoFields()
+      : tournamentFields()
 render()
 
 function render() {
@@ -112,6 +117,49 @@ function bonusHuntFields() {
       { k: 'guessWindowMs', label: 'Guessing window', type: 'minutes', max: 10 },
       { k: 'guessCeilingMultiple', label: 'Reject guesses above this multiple of the balance', type: 'int', half: true },
     ]},
+    { title: 'Bot & Chat', icon: 'smart_toy', rows: chatRows() },
+  ]
+}
+
+function bingoFields() {
+  return [
+    { title: 'Board', icon: 'grid_on', rows: [
+      { k: 'size', label: 'Board size', type: 'segment', options: [[3,'3 × 3'],[5,'5 × 5']] },
+      { note: 'A 5×5 is 25 bonus buys and a full-session commitment — the estimate below is what it costs to fill. A 3×3 is nine, and finishes inside an hour.' },
+      { k: 'openSquares', label: 'Squares held back for late joiners', type: 'stepper', half: true,
+        hint: 'They sit visibly empty and unlock spread across the board, each by its own mini-draw. Set to 0 to close the board after the opening window — on a session that runs for hours, that is a locked door to everyone who tunes in late.' },
+      { k: 'typicalBuy', label: 'Your typical bonus buy', type: 'money', half: true },
+      { k: 'currency', label: 'Currency', type: 'segment', half: true,
+        options: [['EUR','EUR'],['USD','USD'],['GBP','GBP']] },
+      { k: 'freeCentre', label: 'Free centre square (5×5)', type: 'toggle',
+        hint: 'An automatic green nobody owns. The four lines through the centre then need four greens instead of five, which roughly doubles the odds of an instant bingo — about 5% to about 8%.' },
+    ]},
+
+    { title: 'Scoring', icon: 'analytics', accent: 'secondary', rows: [
+      { k: 'greenThresholdX', label: 'A square turns green at', type: 'multi', half: true, step: 0.1 },
+      { k: 'bigWinThresholdX', label: 'Gold at', type: 'multi', half: true, step: 5 },
+      { note: 'Green is profit and counts toward a line. Gold is a louder green — cosmetic to the rules, but it carries enormous weight in best-line scoring. Raising the green threshold makes greens rarer and an instant bingo close to impossible.' },
+      { note: 'If no line goes fully green, the line with the highest combined multiplier wins. Ties break on combined payout, then green count, then lowest cost, then a seeded coin flip — and the board always says on screen which one decided it.' },
+    ]},
+
+    { title: 'Joining', icon: 'group_add', rows: [
+      { k: 'joinGate', label: 'Who can join?', type: 'segment',
+        options: [['anyone','Anyone'],['followers','Followers'],['subscribers','Subscribers']] },
+      { k: 'joinWindowMs', label: 'Opening window', type: 'minutes', max: 15, nullable: true,
+        nullLabel: 'No time limit (close it manually)' },
+      { k: 'uniqueSlots', label: 'One viewer per slot', type: 'toggle',
+        hint: 'First come, first served. A viewer whose pick is already taken is told in chat so they can choose again.' },
+      { note: 'Joining does not close when the window does — it stays open until the last held-back square is claimed, so a viewer arriving at pick 14 can still get in.' },
+    ]},
+
+    { title: 'During the board', icon: 'play_circle', rows: [
+      { k: 'allowManualPick', label: 'Allow playing a square out of order', type: 'toggle',
+        hint: 'For a viewer who just subbed, or to build a moment. It is badged Streamer’s pick on the square and in the log.' },
+      { k: 'allowSettleEarly', label: 'Allow settling the board early', type: 'toggle',
+        hint: 'Ends where it stands and awards the best line among fully-played lines only. Announced as settled early, never silently.' },
+      { k: 'announceDraw', label: 'Announce the draw in chat', type: 'toggle' },
+    ]},
+
     { title: 'Bot & Chat', icon: 'smart_toy', rows: chatRows() },
   ]
 }
@@ -185,6 +233,13 @@ function row(f) {
     case 'int':
       field = `<input data-k="${f.k}" data-t="int" type="number" value="${value ?? 0}"
                  class="input-dark w-full rounded px-md py-sm font-data-mono h-12">`
+      break
+    case 'multi':
+      field = `<div class="relative">
+          <input data-k="${f.k}" data-t="money" type="number" step="${f.step ?? 0.01}" min="0" value="${value ?? 0}"
+            class="input-dark w-full rounded px-md py-sm pr-10 font-data-mono h-12">
+          <span class="absolute right-md top-1/2 -translate-y-1/2 font-data-mono text-on-surface-variant">x</span>
+        </div>`
       break
     case 'stepper':
       field = `<div class="flex items-center">
@@ -312,8 +367,35 @@ function bind() {
   }
 }
 
+/**
+ * §11 — "the config screen must show projected spend".
+ *
+ * `25 squares × your typical buy` is a number the streamer needs before they
+ * start, not after square 14. A 5×5 is a full-session commitment and the
+ * summary says so in money rather than leaving it to be discovered live.
+ */
+function bingoSummary() {
+  const size = cfg.size ?? 5
+  const squares = size * size
+  const lines = size * 2 + 2
+  const buy = Number(cfg.typicalBuy ?? 0)
+  const currency = cfg.currency ?? 'EUR'
+
+  return [
+    ['Board', `${size} × ${size} · ${squares} squares · ${lines} lines`],
+    ['Full board costs', `≈ ${money(squares * buy, currency)}`],
+    ['Green / gold', `${Number(cfg.greenThresholdX ?? 1).toFixed(2)}x / ${cfg.bigWinThresholdX ?? 50}x`],
+    ['Held back', `${cfg.openSquares ?? 0} ${(cfg.openSquares ?? 0) === 1 ? 'square' : 'squares'}`],
+    ['Free centre', cfg.freeCentre ? 'On' : 'Off'],
+    ['Who can join', label(cfg.joinGate)],
+    ['Opening window', cfg.joinWindowMs === null ? 'Manual close' : `${Math.round(cfg.joinWindowMs / 60000)} minutes`],
+  ]
+}
+
 function summarise() {
-  const rows = gameId === 'bonus-hunt'
+  const rows = gameId === 'slot-bingo'
+    ? bingoSummary()
+    : gameId === 'bonus-hunt'
     ? [
         ['Starting balance', `${cfg.currency ?? 'EUR'} ${(cfg.startBalance ?? 0).toLocaleString()}`],
         ['Target', `${cfg.targetBonuses ?? 0} bonuses`],

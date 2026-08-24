@@ -9,6 +9,7 @@
 import type { QuotaCounter } from '@streamarena/db'
 import type { WorkerContext } from './context.js'
 import { endSession } from './session-lifecycle.js'
+import { sweepVerdict } from './sweep-policy.js'
 
 const COUNTERS: QuotaCounter[] = ['deliveries', 'commands', 'dropped', 'chatWrites', 'chatFailures']
 
@@ -47,23 +48,24 @@ export async function flushQuota(ctx: WorkerContext): Promise<void> {
   ctx.log.debug({ channels: byChannel.size }, 'quota flushed')
 }
 
-/**
- * A session left running because the streamer closed the tab keeps a Kick
- * subscription alive, and that is the one thing §6.3 says never to do. After a
- * long silence, close it out.
- */
-const STALE_AFTER_MS = 12 * 60 * 60 * 1000
-
 export async function sweepStaleSessions(ctx: WorkerContext): Promise<void> {
   const active = await ctx.repos.sessions.allActive()
-  const cutoff = Date.now() - STALE_AFTER_MS
+  if (active.length === 0) return
+
+  const lastActivity = await ctx.repos.events.lastActivityAt(active.map((s) => s.id))
+  const now = Date.now()
 
   for (const session of active) {
-    const started = (session.startedAt ?? session.createdAt).getTime()
-    if (started > cutoff) continue
+    const verdict = sweepVerdict(session, lastActivity.get(session.id), now)
+    if (!verdict.sweep) continue
 
     ctx.log.warn(
-      { sessionId: session.id, startedAt: session.startedAt },
+      {
+        sessionId: session.id,
+        phase: session.phase,
+        idleMinutes: Math.round(verdict.idleMs / 60_000),
+        reason: verdict.reason,
+      },
       'abandoning stale session and releasing its Kick subscription',
     )
     await endSession(ctx, session.id, 'abandoned').catch((err) =>

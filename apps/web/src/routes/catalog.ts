@@ -54,11 +54,20 @@ export async function registerCatalogRoutes(app: FastifyInstance, ctx: WebContex
       })
       .parse(req.body)
 
+    const session = await ctx.repos.sessions.byId(id)
+    /*
+     * Bonus Hunt keys its queue by entry id; the games built on a viewer pool —
+     * Tournament and Slot Bingo — key theirs by user id and name their actions
+     * accordingly. The endpoint sends both ids in the payload either way, so
+     * only the action name has to know the difference.
+     */
+    const pooled = session?.gameId === 'slot-tournament' || session?.gameId === 'slot-bingo'
+
     if (body.action === 'discard') {
       await ctx.queues.ingest.add('control', {
         kind: 'control',
         sessionId: id,
-        action: 'entry.remove',
+        action: pooled ? 'pool.remove' : 'entry.remove',
         payload: { entryId: body.entryId, userId: body.entryId },
         actor: { userId: user.id, username: user.displayName, role: 'broadcaster' },
         at: Date.now(),
@@ -78,13 +87,10 @@ export async function registerCatalogRoutes(app: FastifyInstance, ctx: WebContex
     // rate for every channel, which is why we bother capturing rawText.
     if (body.rawText) await ctx.catalog.confirm(body.rawText, slot.slotId)
 
-    const session = await ctx.repos.sessions.byId(id)
-    const action = session?.gameId === 'slot-tournament' ? 'pool.resolve' : 'entry.resolve'
-
     await ctx.queues.ingest.add('control', {
       kind: 'control',
       sessionId: id,
-      action,
+      action: pooled ? 'pool.resolve' : 'entry.resolve',
       payload: {
         entryId: body.entryId,
         userId: body.entryId,

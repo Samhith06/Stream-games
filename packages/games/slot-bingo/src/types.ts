@@ -207,6 +207,15 @@ export const bingoConfigSchema = z
     /** 5×5 only. Roughly doubles instant-bingo odds, ~5% → ~8% (§7). */
     freeCentre: z.boolean().default(false),
 
+    /**
+     * The streamer's typical bonus buy. Not a game rule — it exists so the
+     * setup screen can answer "what does a full board cost?" before the session
+     * rather than after square 14 (§11). The live projected-spend meter uses
+     * real buys once there are any.
+     */
+    typicalBuy: z.number().min(0).max(1_000_000).default(100),
+    currency: z.enum(['EUR', 'USD', 'GBP']).default('EUR'),
+
     joinGate: z.enum(['anyone', 'followers', 'subscribers']).default('anyone'),
     joinWindowMs: z.number().int().min(30_000).max(1_800_000).nullable().default(300_000),
     uniqueSlots: z.boolean().default(true),

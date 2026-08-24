@@ -36,6 +36,7 @@
 <script type="module">
 import { api, control, connect, attempt, toast, money, signed, multiplier, countdown, copy, $, escapeHtml, slotTile, requireSessionId } from './app.js'
 import { mountShell } from './shell.js'
+import { bingoBoard, bingoJoining, bingoResult, lineRail } from './bingo-view.js'
 
 const sessionId = requireSessionId()
 const me = await mountShell({ active: '/session' })
@@ -90,7 +91,8 @@ setInterval(() => { const el = $('#timer'); if (el) tickTimer(el) }, 250)
 // ─── render ─────────────────────────────────────────────────────────────────
 
 function draw() {
-  $('#root').innerHTML = gameId === 'bonus-hunt' ? hunt() : tournament()
+  $('#root').innerHTML =
+    gameId === 'bonus-hunt' ? hunt() : gameId === 'slot-bingo' ? bingo() : tournament()
   drawActionBar()
   wire()
   paintConnection()
@@ -199,7 +201,17 @@ function hunt() {
 }
 
 function unresolved() {
-  const items = state.unresolved ?? []
+  /*
+   * Bonus Hunt queues entries and the pool games queue people, so the same
+   * panel arrives with two different shapes. Normalise here rather than at four
+   * call sites: the id is whatever the game's resolve action keys on, and the
+   * endpoint accepts it under `entryId` for both.
+   */
+  const items = (state.unresolved ?? []).map((item) => ({
+    ...item,
+    key: item.entryId ?? item.userId,
+    by: item.requestedBy?.username ?? item.username ?? 'someone',
+  }))
   if (items.length === 0) return ''
 
   // §20 — the most valuable component in the dashboard. Keyboard shortcuts
@@ -216,12 +228,12 @@ function unresolved() {
     <div class="flex gap-sm overflow-x-auto pb-xs">
       ${items.map((item, index) => `
         <div class="bg-surface-container p-sm rounded-lg min-w-[260px] border ${index === 0 ? 'border-tertiary' : 'border-outline-variant'} flex flex-col gap-xs"
-             data-unresolved="${escapeHtml(item.entryId)}">
+             data-unresolved="${escapeHtml(item.key)}">
           <span class="font-data-mono text-on-surface">"${escapeHtml(item.rawText)}"</span>
-          <span class="text-sm text-on-surface-variant">by ${escapeHtml(item.requestedBy.username)}</span>
+          <span class="text-sm text-on-surface-variant">by ${escapeHtml(item.by)}</span>
           <div class="flex flex-col gap-1 mt-xs">
             ${(item.suggestions ?? []).slice(0, 3).map((s, i) => `
-              <button data-resolve="${escapeHtml(item.entryId)}" data-slot="${escapeHtml(s.slotId)}"
+              <button data-resolve="${escapeHtml(item.key)}" data-slot="${escapeHtml(s.slotId)}"
                       data-raw="${escapeHtml(item.rawText)}"
                 class="text-left bg-surface-variant hover:bg-primary hover:text-on-primary px-2 py-1 rounded text-xs
                        font-bold transition-colors flex justify-between">
@@ -229,9 +241,9 @@ function unresolved() {
                 <span class="opacity-60">${Math.round((s.confidence ?? 0) * 100)}%</span>
               </button>`).join('') || '<span class="text-[11px] text-on-surface-variant/60">No suggestions</span>'}
             <div class="flex gap-1 mt-1">
-              <input data-custom="${escapeHtml(item.entryId)}" placeholder="Type a slot name…"
+              <input data-custom="${escapeHtml(item.key)}" placeholder="Type a slot name…"
                      class="input-dark flex-1 rounded px-2 py-1 text-xs font-data-mono">
-              <button data-discard="${escapeHtml(item.entryId)}"
+              <button data-discard="${escapeHtml(item.key)}"
                 class="bg-surface-variant hover:bg-error hover:text-on-error px-2 py-1 rounded text-xs font-bold transition-colors">D</button>
             </div>
           </div>
@@ -479,6 +491,44 @@ function guessPanel(phase) {
 }
 
 // ─── Slot Tournament ────────────────────────────────────────────────────────
+
+// ─── Slot Bingo ─────────────────────────────────────────────────────────────
+
+function bingo() {
+  const phase = state.phase ?? 'joining'
+  const phases = ['Joining', 'Draw', 'Playing', 'Results']
+  const current =
+    { joining: 'Joining', draw: 'Draw', placement: 'Draw', pick: 'Playing',
+      buying: 'Playing', result: 'Playing', complete: 'Results' }[phase] ?? 'Playing'
+
+  const net = state.netPosition ?? 0
+
+  return `
+  ${header(phases, current)}
+
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-sm mb-lg">
+    ${statTile('Total spent', money(state.totalSpent ?? 0, currency))}
+    ${statTile('Returned', money(state.totalReturned ?? 0, currency), { accent: 'text-win' })}
+    ${statTile('Net', signed(net, currency), {
+      accent: net >= 0 ? 'text-win' : 'text-loss',
+      border: net >= 0 ? 'border-win/30' : 'border-loss/30',
+    })}
+    ${statTile(
+      'Lines alive',
+      `${state.linesAlive ?? 0}<span class="text-on-surface-variant text-[14px]"> / ${state.linesTotal ?? 0}</span>`,
+      { accent: 'text-primary', border: 'border-primary/30', icon: 'timeline',
+        sub: `${state.squaresPlayed ?? 0} of ${state.squaresTotal ?? 0} squares played` },
+    )}
+  </div>
+
+  ${phase === 'joining' ? bingoJoining(state) : ''}
+  ${phase === 'complete' ? bingoResult(state) : ''}
+
+  <div class="grid grid-cols-1 xl:grid-cols-12 gap-lg">
+    <div class="xl:col-span-7">${bingoBoard(state, { manualPick: detail.config.allowManualPick !== false })}</div>
+    <div class="xl:col-span-5 flex flex-col gap-lg">${lineRail(state)}${unresolved()}</div>
+  </div>`
+}
 
 function tournament() {
   const phase = state.phase ?? 'joining'
@@ -741,6 +791,57 @@ function drawActionBar() {
       <button data-finish ${left > 0 ? 'disabled' : ''}
         class="bg-primary text-on-primary px-xl py-sm rounded-lg font-bold uppercase font-label-caps
                disabled:opacity-40 disabled:cursor-not-allowed">Finish hunt</button>`
+  } else if (gameId === 'slot-bingo' && phase === 'joining') {
+    html = `
+      <div class="text-on-surface-variant font-data-mono text-sm">
+        ${state.entrantCount ?? 0} joined. Closing runs the draw and fills the board.
+      </div>
+      <button data-bingodraw class="bg-primary text-on-primary px-xl py-sm rounded-lg font-bold uppercase font-label-caps">
+        Close joining &amp; fill the board</button>`
+  } else if (gameId === 'slot-bingo' && phase !== 'complete' && state.drawCompleted !== false) {
+    const armed = (state.squares ?? []).find((s) => s.id === state.currentSquareId)
+    const remaining = (state.squares ?? []).filter(
+      (s) => s.owner !== 'open' && s.status !== 'settled',
+    ).length
+
+    html = armed
+      ? `
+      <div class="flex items-center gap-md min-w-0">
+        <span class="font-label-caps text-label-caps uppercase text-primary bg-primary/15
+                     border border-primary/40 px-sm py-xs rounded shrink-0">${escapeHtml(armed.id)}</span>
+        <div class="min-w-0">
+          <div class="font-bold truncate">${escapeHtml(armed.slotName ?? 'Slot')}</div>
+          <div class="text-[12px] text-on-surface-variant truncate">@${escapeHtml(armed.username ?? 'house')}</div>
+        </div>
+        ${
+          // §7.1 — the loudest thing on the bar when it applies: this buy can
+          // end the board right now.
+          (state.matchPointLines ?? []).length > 0
+            ? `<span class="font-label-caps text-label-caps uppercase text-gold bg-gold/10
+                           border border-gold/40 px-sm py-xs rounded shrink-0">Match point</span>`
+            : ''
+        }
+      </div>
+      <button data-bingoresult="${escapeHtml(armed.id)}"
+        class="bg-primary text-on-primary px-xl py-sm rounded-lg font-bold uppercase font-label-caps
+               flex items-center gap-sm hover:brightness-110 transition-all">
+        Enter result <span class="material-symbols-outlined text-[18px]">arrow_forward</span></button>`
+      : `
+      <div class="text-on-surface-variant font-data-mono text-sm">
+        ${remaining} ${remaining === 1 ? 'square' : 'squares'} left to play.
+      </div>
+      <div class="flex items-center gap-sm">
+        ${
+          detail.config.allowSettleEarly === false
+            ? ''
+            : `<button data-bingosettle class="border border-outline-variant hover:border-loss hover:text-loss
+                 text-on-surface-variant px-md py-sm rounded-lg font-bold uppercase font-label-caps transition-colors">
+                 Settle early</button>`
+        }
+        <button data-bingopick class="bg-primary text-on-primary px-xl py-sm rounded-lg font-bold uppercase
+          font-label-caps flex items-center gap-sm hover:brightness-110 transition-all">
+          Play next square <span class="material-symbols-outlined text-[18px]">play_arrow</span></button>
+      </div>`
   } else if (gameId === 'slot-tournament' && phase === 'joining') {
     html = `
       <div class="text-on-surface-variant font-data-mono text-sm">
@@ -793,6 +894,17 @@ function wire() {
 
   // Entry actions
   on('[data-collect]', 'click', (e) => collectDialog(e.currentTarget.dataset.collect))
+  on('[data-bingodraw]', 'click', () => act('draw.run'))
+  on('[data-bingopick]', 'click', () => act('square.pick'))
+  on('[data-pickmanual]', 'click', (e) => act('square.pickManual', { squareId: e.currentTarget.dataset.pickmanual }))
+  on('[data-bingoresult]', 'click', (e) => squareResultDialog(e.currentTarget.dataset.bingoresult))
+  on('[data-bingosettle]', 'click', () =>
+    confirmDialog(
+      'Settle the board here?',
+      'The best fully-played line wins. Lines still holding an unplayed square are not eligible. This is announced as settled early, never silently.',
+      () => act('board.settleEarly'),
+    ))
+
   on('[data-uncollect]', 'click', (e) => act('entry.uncollect', { entryId: e.currentTarget.dataset.uncollect }))
   on('[data-remove]', 'click', (e) => act('entry.remove', { entryId: e.currentTarget.dataset.remove }))
 
@@ -980,6 +1092,105 @@ function bonusBadge(type) {
               px-2 py-0.5 rounded-full whitespace-nowrap">Super</span>`
   }
   return ''
+}
+
+/**
+ * The two numbers a square settles on — §6.
+ *
+ * The multiplier is computed and shown as you type, never entered: it is
+ * payout divided by buy cost, and letting it be typed separately is an
+ * invitation for the three numbers to disagree on stream.
+ */
+function squareResultDialog(squareId) {
+  const square = (state.squares ?? []).find((s) => s.id === squareId)
+  const suggested = detail.config?.typicalBuy || ''
+
+  const dialog = $('#dialog')
+  dialog.innerHTML = `
+    <div class="bg-surface-container rounded-xl border border-outline-variant shadow-xl max-w-md w-full p-xl relative overflow-hidden">
+      <div class="absolute top-0 left-0 w-full h-1 bg-primary"></div>
+      <h2 class="font-display-lg-mobile text-display-lg-mobile font-bold mb-base">
+        ${escapeHtml(squareId)}</h2>
+      <p class="text-on-surface-variant mb-lg">
+        ${escapeHtml(square?.slotName ?? 'Slot')} · @${escapeHtml(square?.username ?? 'house')}</p>
+
+      <div class="grid grid-cols-2 gap-md mb-lg">
+        <div>
+          <label class="block font-label-caps text-label-caps text-on-surface-variant uppercase mb-xs">Buy cost</label>
+          <input id="sq-buy" type="number" step="0.01" min="0.01" value="${escapeHtml(String(suggested))}"
+                 class="input-dark w-full rounded-lg px-sm py-xs font-data-mono text-[18px]" autocomplete="off">
+        </div>
+        <div>
+          <label class="block font-label-caps text-label-caps text-on-surface-variant uppercase mb-xs">Payout</label>
+          <input id="sq-payout" type="number" step="0.01" min="0" value=""
+                 class="input-dark w-full rounded-lg px-sm py-xs font-data-mono text-[18px]" autocomplete="off">
+        </div>
+      </div>
+
+      <div class="bg-surface-container-low rounded-lg border border-outline-variant/40 p-md mb-lg
+                  flex items-center justify-between">
+        <span class="font-label-caps text-label-caps text-on-surface-variant uppercase">Multiplier</span>
+        <span id="sq-multi" class="font-data-mono text-[26px] text-on-surface-variant">—</span>
+      </div>
+
+      <div class="flex gap-md justify-end">
+        <button id="dlg-cancel" class="px-md py-sm rounded-lg font-bold text-on-surface-variant
+          hover:bg-surface-variant transition-colors font-label-caps uppercase">Cancel</button>
+        <button id="dlg-ok" class="bg-primary text-on-primary px-md py-sm rounded-lg font-bold font-label-caps uppercase">
+          Confirm result</button>
+      </div>
+    </div>`
+
+  dialog.classList.remove('hidden')
+  dialog.classList.add('flex')
+
+  const paint = () => {
+    const buy = Number($('#sq-buy').value)
+    const payout = Number($('#sq-payout').value)
+    const el = $('#sq-multi')
+
+    if (!Number.isFinite(buy) || buy <= 0 || !Number.isFinite(payout) || payout < 0) {
+      el.textContent = '—'
+      el.className = 'font-data-mono text-[26px] text-on-surface-variant'
+      return
+    }
+
+    const x = payout / buy
+    el.textContent = multiplier(Math.round(x * 100) / 100)
+    // Show the tier it will land on before it lands, since the colour is what
+    // the board and every line will be read in.
+    el.className =
+      'font-data-mono text-[26px] ' +
+      (x >= (state.bigWinThresholdX ?? 50)
+        ? 'text-gold'
+        : x >= (state.greenThresholdX ?? 1)
+          ? 'text-win'
+          : 'text-loss')
+  }
+
+  const close = () => {
+    dialog.classList.add('hidden')
+    dialog.classList.remove('flex')
+  }
+
+  $('#sq-buy').oninput = paint
+  $('#sq-payout').oninput = paint
+  $('#dlg-cancel').onclick = close
+  $('#dlg-ok').onclick = async () => {
+    const buyCost = Number($('#sq-buy').value)
+    const payout = Number($('#sq-payout').value)
+    // §6 — buy cost must exceed zero. A payout of zero is valid and common.
+    if (!Number.isFinite(buyCost) || buyCost <= 0) return toast('Buy cost must be more than zero', 'error')
+    if (!Number.isFinite(payout) || payout < 0) return toast('Enter the payout — zero is fine', 'error')
+
+    await act('square.result', { squareId, buyCost, payout })
+    close()
+  }
+
+  $('#sq-payout').onkeydown = (e) => {
+    if (e.key === 'Enter') $('#dlg-ok').click()
+  }
+  setTimeout(() => $('#sq-payout')?.focus(), 50)
 }
 
 function collectDialog(entryId) {

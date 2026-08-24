@@ -21,6 +21,7 @@
     "build": "tsc -b && npm run build:css",
     "clean": "tsc -b --clean",
     "typecheck": "tsc -b",
+    "pretest": "tsc -b",
     "test": "node --test --experimental-strip-types \"packages/**/test/*.test.ts\" \"apps/**/test/*.test.ts\"",
     "dev:web": "node --env-file-if-exists=.env --watch apps/web/dist/index.js",
     "dev:worker": "node --env-file-if-exists=.env --watch apps/worker/dist/index.js",

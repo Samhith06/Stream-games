@@ -25,11 +25,26 @@ import { dirname, join } from 'node:path'
 const PUBLIC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'public')
 
 /** Every page with a module body worth policing. */
-const PAGES = ['session.html', 'history.html', 'settings.html', 'games.html', 'setup.html', 'recap.html']
+const PAGES = [
+  'session.html',
+  'history.html',
+  'settings.html',
+  'games.html',
+  'setup.html',
+  'recap.html',
+  // The one page that is literally on stream: a TDZ here is a broken overlay in
+  // front of an audience, with no console anyone will be looking at.
+  'overlay.html',
+]
+
+/** Plain modules, which have no <script> wrapper to unpack. */
+const MODULES = ['bingo-view.js']
 
 function moduleBody(file: string): string {
-  const html = readFileSync(join(PUBLIC_DIR, file), 'utf8')
-  const match = html.match(/<script type="module">([\s\S]*?)<\/script>/)
+  const source = readFileSync(join(PUBLIC_DIR, file), 'utf8')
+  if (!file.endsWith('.html')) return source
+
+  const match = source.match(/<script type="module">([\s\S]*?)<\/script>/)
   assert.ok(match, `${file} has no module script`)
   return match![1]!
 }
@@ -45,8 +60,8 @@ function moduleScope(body: string): Set<string> {
     }
   }
   // Unindented declarations are the top level; anything nested is indented.
-  for (const m of body.matchAll(/^(?:const|let|var)\s+([A-Za-z_$][\w$]*)/gm)) names.add(m[1]!)
-  for (const m of body.matchAll(/^(?:async )?function\s+([A-Za-z_$][\w$]*)/gm)) names.add(m[1]!)
+  for (const m of body.matchAll(/^(?:export )?(?:const|let|var)\s+([A-Za-z_$][\w$]*)/gm)) names.add(m[1]!)
+  for (const m of body.matchAll(/^(?:export )?(?:async )?function\s+([A-Za-z_$][\w$]*)/gm)) names.add(m[1]!)
 
   return names
 }
@@ -69,12 +84,14 @@ function wireLocals(body: string): Set<string> {
  * and a guard that silently skips a function reports green while the bug it was
  * written for ships. `async` is included for the same reason: the functions
  * that run at startup, and can therefore hit a dead zone, are exactly the
- * async ones.
+ * async ones. So is `export`: a shared module declares everything with it, and
+ * without the prefix the guard finds no functions at all in one and reports
+ * green on a file it never actually read.
  */
 function topLevelFunctions(body: string): Map<string, string> {
   const found = new Map<string, string>()
 
-  for (const m of body.matchAll(/^(?:async )?function ([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/gm)) {
+  for (const m of body.matchAll(/^(?:export )?(?:async )?function ([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/gm)) {
     const open = m.index! + m[0]!.length - 1
     let depth = 0
 
@@ -133,13 +150,13 @@ test('the collect dialog can reach everything it needs', () => {
 test('no top-level call runs before the state it touches is declared', () => {
   const problems: string[] = []
 
-  for (const page of PAGES) {
+  for (const page of [...PAGES, ...MODULES]) {
     const lines = moduleBody(page).split('\n')
 
     // Unindented let/const are the module's own state.
     const declaredAt = new Map<string, number>()
     lines.forEach((line, i) => {
-      const m = line.match(/^(?:const|let)\s+([A-Za-z_$][\w$]*)/)
+      const m = line.match(/^(?:export )?(?:const|let)\s+([A-Za-z_$][\w$]*)/)
       if (m) declaredAt.set(m[1]!, i)
     })
 

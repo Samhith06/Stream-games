@@ -163,6 +163,13 @@
   .bar-fill::after { content: ''; position: absolute; inset: 0;
                      background: linear-gradient(90deg, transparent, rgba(255,255,255,.28), transparent); }
 
+  /* slotTile() takes a class name, and the overlay ships no Tailwind — so the
+     three sizes it is asked for here are declared outright. */
+  .thumb-lg    { width: 76px; height: 76px; border-radius: 12px; object-fit: cover;
+                 flex-shrink: 0; font-size: 26px; }
+  .sq-thumb    { width: 40px; height: 40px; border-radius: 8px;  object-fit: cover; font-size: 20px; }
+  .sq-thumb-lg { width: 74px; height: 74px; border-radius: 10px; object-fit: cover; font-size: 26px; }
+
   .hidden { display: none !important; }
 
   /* Takeover for the result reveal and the between-rounds bracket. */
@@ -227,8 +234,8 @@ const HUNT_TABS = [
   ['complete', 'Final Result'],
 ]
 
-function renderTabs(phase) {
-  el('tabs').innerHTML = HUNT_TABS.map(
+function renderTabs(phase, tabs = HUNT_TABS) {
+  el('tabs').innerHTML = tabs.map(
     ([key, label]) => `<span class="tab ${key === phase ? 'on' : ''}">${label}</span>`,
   ).join('')
 }
@@ -352,10 +359,11 @@ function render() {
   // The pill reads LIVE; the phase is named by the tabs, so it needn't repeat here.
   el('phase').textContent = 'LIVE'
   el('viewers-icon').innerHTML = ICON.viewers
-  const people = state.participantCount ?? state.poolCount
+  const people = state.participantCount ?? state.poolCount ?? state.entrantCount
   el('participants').textContent = people ? people.toLocaleString() : '—'
 
   if (gameId === 'slot-tournament') return renderTournament()
+  if (gameId === 'slot-bingo') return renderBingo()
   renderHunt()
 }
 
@@ -542,6 +550,341 @@ function showTournamentResult() {
     </div>`
 }
 
+// ─── Slot Bingo ─────────────────────────────────────────────────────────────
+
+const BINGO_TABS = [
+  ['joining', 'Joining'],
+  ['placement', 'The Board'],
+  ['buying', 'Playing'],
+  ['complete', 'Result'],
+]
+
+/** buying/result/pick are one thing to a viewer: the board is being played. */
+function bingoTab(phase) {
+  return phase === 'joining' || phase === 'placement' || phase === 'complete' ? phase : 'buying'
+}
+
+function renderBingo() {
+  const phase = state.phase ?? 'joining'
+  renderTabs(bingoTab(phase), BINGO_TABS)
+
+  if (phase !== 'complete') el('takeover').className = 'hidden'
+
+  if (phase === 'joining') return bingoJoining()
+  if (phase === 'placement') return bingoReveal()
+  if (phase === 'complete') return bingoFinal()
+  bingoPlaying()
+}
+
+/**
+ * The board.
+ *
+ * Colour carries the meaning here, not text: red, green and gold are legible
+ * across a compressed 1080p stream at a glance, and a username in a 128px cell
+ * would not be. Every name the viewer needs is somewhere at full size — the
+ * armed card, the one-away rail, the winners list — so the grid is free to be
+ * a grid.
+ */
+function bingoGrid(size, cellPx) {
+  const squares = state.squares ?? []
+  const one = new Set(
+    (state.lines ?? [])
+      .filter((l) => l.state === 'oneAway')
+      .flatMap((l) => l.squareIds),
+  )
+
+  return `
+  <div style="display:grid;gap:6px;grid-template-columns:repeat(${size},${cellPx}px)">
+    ${squares.map((s) => bingoCell(s, one.has(s.id), cellPx)).join('')}
+  </div>`
+}
+
+function bingoCell(square, oneAway, cellPx) {
+  const armed = square.id === state.currentSquareId
+  const settled = square.status === 'settled'
+
+  const edge = armed
+    ? 'var(--accent)'
+    : square.tier === 'gold'
+      ? 'var(--gold)'
+      : square.tier === 'green'
+        ? 'var(--win)'
+        : square.tier === 'red'
+          ? 'var(--loss)'
+          : oneAway
+            ? 'var(--gold)'
+            : 'var(--border)'
+
+  const fill = settled
+    ? square.tier === 'gold'
+      ? 'rgba(255,197,61,.20)'
+      : square.tier === 'green'
+        ? 'rgba(34,232,143,.16)'
+        : 'rgba(255,77,106,.10)'
+    : 'var(--panel)'
+
+  const body = settled
+    ? `<div class="display" style="font-size:${Math.max(22, Math.round(cellPx * 0.24))}px;color:${
+        square.tier === 'gold' ? 'var(--gold)' : square.tier === 'green' ? 'var(--win)' : 'var(--loss)'
+      }">${compactX(square.multiplier)}</div>`
+    : square.owner === 'open'
+      ? `<div class="mono" style="font-size:20px;color:var(--muted);text-align:center;line-height:1.2">
+           ${square.unlockAfterPick != null ? `OPENS<br>${square.unlockAfterPick}` : '—'}</div>`
+      : square.owner === 'free'
+        ? `<div class="label" style="font-size:20px;color:var(--accent)">FREE</div>`
+        : slotTile(square.slotName, square.thumbnail, cellPx >= 120 ? 'sq-thumb-lg' : 'sq-thumb')
+
+  return `
+  <div style="width:${cellPx}px;height:${cellPx}px;position:relative;border-radius:12px;
+              border:${armed ? 4 : 2}px solid ${edge};background:${fill};backdrop-filter:blur(10px);
+              display:flex;align-items:center;justify-content:center;overflow:hidden
+              ${armed ? ';box-shadow:0 0 0 6px rgba(34,211,238,.18)' : ''}
+              ${square.owner === 'open' && !settled ? ';border-style:dashed' : ''}">
+    <span class="mono" style="position:absolute;top:4px;left:8px;font-size:20px;font-weight:700;
+                              color:var(--muted);opacity:.75">${escapeHtml(square.id)}</span>
+    ${body}
+  </div>`
+}
+
+/**
+ * A multiplier that fits in a cell.
+ *
+ * `118.60x` is seven characters and will not fit an 81px square at a size §19
+ * allows, so precision gives way at the point it stops mattering: nobody
+ * watching needs the second decimal of a 118x, and the exact figure is on the
+ * streamer's dashboard either way.
+ */
+function compactX(x) {
+  if (x === null || x === undefined) return '—'
+  if (x >= 100) return `${Math.round(x)}x`
+  if (x >= 10) return `${x.toFixed(1)}x`
+  return `${x.toFixed(2)}x`
+}
+
+function bingoJoining() {
+  const claimed = (state.squares ?? []).filter((s) => s.owner === 'viewer').length
+  const total = state.squaresTotal ?? 25
+
+  el('left').innerHTML =
+    stat('Squares claimed', `${claimed}<span style="color:var(--muted);font-size:44px">/${total}</span>`,
+      'var(--primary)', 76) +
+    (state.joinWindowEndsAt
+      ? stat('Joining closes in', '<span id="countdown">—</span>', 'var(--accent)', 62)
+      : '')
+
+  el('right').innerHTML = ''
+  el('bottom').innerHTML = `
+    <div class="panel" style="padding:28px 36px;text-align:center">
+      <div style="font-size:32px;font-weight:700">
+        Type <span class="mono" style="color:var(--accent)">!join &lt;slot&gt;</span> to claim a square
+      </div>
+      <div class="mono" style="font-size:24px;color:var(--muted);margin-top:10px">
+        One square each · slots are unique, first come first served
+      </div>
+    </div>`
+}
+
+/**
+ * The board reveal — the moment the draw lands.
+ *
+ * A takeover rather than a side panel, because this is the only time the whole
+ * board and everyone's name on it are worth the full frame, and §5.1's
+ * placement advantage ("the centre sits on four lines") is only arguable while
+ * chat can see where they ended up.
+ */
+function bingoReveal() {
+  const squares = state.squares ?? []
+  const size = state.size ?? 5
+
+  el('left').innerHTML = ''
+  el('right').innerHTML = ''
+  el('bottom').innerHTML = ''
+  el('takeover').className = ''
+  el('takeover').innerHTML = `
+    <div style="display:flex;align-items:center;gap:64px">
+      <div>${bingoGrid(size, 150)}</div>
+      <div style="width:520px">
+        <div class="label" style="font-size:26px;color:var(--accent);margin-bottom:14px">The board is set</div>
+        <div class="display" style="font-size:62px;line-height:1.05;margin-bottom:28px">
+          ${squares.filter((s) => s.owner === 'viewer').length} squares claimed
+        </div>
+        <div class="panel" style="padding:22px 26px">
+          <div class="label" style="margin-bottom:12px">Best placement</div>
+          ${bestPlacements(squares, 4)}
+        </div>
+        <div class="mono" style="font-size:22px;color:var(--muted);margin-top:22px;line-height:1.5">
+          ${state.linesTotal ?? 12} lines · every green builds one · ${size} in a row ends the board
+        </div>
+      </div>
+    </div>`
+}
+
+/** §5.1 — placement is not neutral, so name the people it favoured. */
+function bestPlacements(squares, count) {
+  const top = squares
+    .filter((s) => s.owner === 'viewer')
+    .sort((a, b) => (b.lineCount ?? 0) - (a.lineCount ?? 0))
+    .slice(0, count)
+
+  if (top.length === 0) return '<div class="mono" style="font-size:22px;color:var(--muted)">No viewer squares</div>'
+
+  return top
+    .map(
+      (s) => `
+      <div class="row" style="padding:10px 0;font-size:24px">
+        <span class="mono" style="color:var(--accent);width:56px;flex-shrink:0">${escapeHtml(s.id)}</span>
+        <span class="grow truncate">@${escapeHtml(s.username ?? '')}</span>
+        <span class="mono" style="color:var(--muted);font-size:20px">on ${s.lineCount} lines</span>
+      </div>`,
+    )
+    .join('')
+}
+
+function bingoPlaying() {
+  const armed = (state.squares ?? []).find((s) => s.id === state.currentSquareId)
+  const net = state.netPosition ?? 0
+  const matchPoint = (state.matchPointLines ?? []).length > 0
+
+  el('left').innerHTML = armed
+    ? `
+    <div class="card enter" style="border-top-color:${matchPoint ? 'var(--gold)' : 'var(--accent)'};margin-bottom:16px">
+      <div class="bloom" style="background:${matchPoint ? 'var(--gold)' : 'var(--accent)'}"></div>
+      <div class="label" style="margin-bottom:12px;color:${matchPoint ? 'var(--gold)' : 'var(--muted)'}">
+        ${matchPoint ? 'Match point · this buy can end it' : `Now playing · square ${escapeHtml(armed.id)}`}
+      </div>
+      <div style="display:flex;align-items:center;gap:18px">
+        ${slotTile(armed.slotName, armed.thumbnail, 'thumb-lg')}
+        <div class="grow" style="min-width:0">
+          <div class="display truncate" style="font-size:40px">@${escapeHtml(armed.username ?? 'House')}</div>
+          <div class="mono truncate" style="font-size:22px;font-weight:500;color:var(--muted);margin-top:6px">
+            ${escapeHtml(armed.slotName ?? '')}</div>
+        </div>
+      </div>
+      <div class="mono" style="font-size:20px;color:var(--muted);margin-top:16px">
+        on ${armed.lineCount ?? 0} lines${armed.manualPick ? " · streamer's pick" : ''}
+      </div>
+    </div>`
+    : stat('Squares played', `${state.squaresPlayed ?? 0}<span style="color:var(--muted);font-size:40px">/${state.squaresTotal ?? 0}</span>`,
+        'var(--primary)', 68)
+
+  el('left').innerHTML +=
+    stat('Lines alive', `${state.linesAlive ?? 0}<span style="color:var(--muted);font-size:40px">/${state.linesTotal ?? 0}</span>`,
+      state.linesAlive === 1 ? 'var(--gold)' : 'var(--accent)', 68) +
+    stat('Net', signed(net, currency), net >= 0 ? 'var(--win)' : 'var(--loss)', 56)
+
+  el('right').innerHTML = `<div class="panel" style="padding:20px">${bingoGrid(state.size ?? 5, 80)}</div>`
+  el('bottom').innerHTML = oneAwayRail()
+}
+
+/**
+ * The one-away rail — §7's tension meter.
+ *
+ * Only lines that are one square from completing, because a rail listing all
+ * twelve is a table and nobody reads a table on a stream. When none are close
+ * it falls back to the best line, so the strip is never an empty box.
+ */
+function oneAwayRail() {
+  const byId = new Map((state.squares ?? []).map((s) => [s.id, s]))
+  const close = (state.lines ?? []).filter((l) => l.state === 'oneAway')
+
+  if (close.length === 0) {
+    const best = (state.lines ?? []).find((l) => l.id === state.bestLineId)
+    if (!best) return ''
+    return `
+      <div class="panel" style="padding:22px 36px;display:flex;align-items:center;justify-content:center;gap:20px">
+        <span class="label">Best line</span>
+        <span class="display" style="font-size:34px">${escapeHtml(best.label)}</span>
+        <span class="display" style="font-size:34px;color:var(--win)">${multiplier(best.totalMultiplier)}</span>
+      </div>`
+  }
+
+  return `
+  <div class="panel enter" style="padding:20px 30px;display:flex;align-items:center;gap:28px;overflow:hidden">
+    <span class="label" style="color:var(--gold);flex-shrink:0">
+      ${close.length} line${close.length === 1 ? '' : 's'} · one away</span>
+    <div style="display:flex;gap:26px;flex:1;min-width:0;overflow:hidden">
+      ${close
+        .slice(0, 4)
+        .map((line) => {
+          const need = line.squareIds.find((id) => byId.get(id)?.status !== 'settled')
+          const holder = byId.get(need)
+          return `
+          <div style="display:flex;align-items:center;gap:12px;min-width:0">
+            <span class="mono" style="font-size:22px;color:var(--muted);flex-shrink:0">${escapeHtml(line.label)}</span>
+            <span class="mono" style="font-size:24px;font-weight:700;color:var(--gold);flex-shrink:0">${escapeHtml(need ?? '')}</span>
+            <span class="truncate" style="font-size:22px;font-weight:600">@${escapeHtml(holder?.username ?? 'house')}</span>
+          </div>`
+        })
+        .join('')}
+    </div>
+    <span class="display" style="font-size:30px;color:var(--win);flex-shrink:0">
+      ${multiplier(state.bestLineMultiplier)}</span>
+  </div>`
+}
+
+function bingoFinal() {
+  const bingo = (state.bingoLines ?? []).length > 0
+  const line = (state.lines ?? []).find((l) => l.id === state.winningLine)
+  const winners = state.winners ?? []
+
+  // §8 — always state how it was decided. An unexplained winning line reads as
+  // broken software to everyone watching.
+  const how = {
+    bingo: 'Completed line',
+    bestLine: 'Highest combined multiplier',
+    net: 'Highest net position',
+    payout: 'Tied on multiplier — decided on combined payout',
+    greenCount: 'Tied on payout — decided on green count',
+    attempts: 'Tied on greens — decided on fewer buys',
+    cost: 'Tied — decided on lower combined cost',
+    coinflip: 'Tied throughout — decided on a seeded coin flip',
+    settledEarly: 'Settled early — best fully-played line',
+    capped: 'Stopped on a cap — best line',
+  }[state.decidedBy] ?? ''
+
+  el('left').innerHTML = ''
+  el('right').innerHTML = ''
+  el('bottom').innerHTML = ''
+  el('takeover').className = ''
+  el('takeover').innerHTML = `
+    <div style="display:flex;align-items:center;gap:72px">
+      <div>${bingoGrid(state.size ?? 5, 132)}</div>
+      <div style="width:560px">
+        <div class="display ${bingo ? 'celebrate' : ''}"
+             style="font-size:${bingo ? 128 : 96}px;line-height:1;color:${bingo ? 'var(--gold)' : 'var(--primary)'}">
+          ${bingo ? 'BINGO' : 'BEST LINE'}
+        </div>
+        <div class="display" style="font-size:46px;margin-top:20px">${escapeHtml(line?.label ?? '—')}</div>
+        <div class="display" style="font-size:56px;color:var(--win);margin-top:8px">
+          ${multiplier(line?.totalMultiplier)} combined</div>
+        ${how ? `<div class="mono" style="font-size:22px;color:var(--muted);margin-top:14px">${escapeHtml(how)}</div>` : ''}
+
+        <div class="panel" style="padding:22px 26px;margin-top:34px">
+          <div class="label" style="margin-bottom:12px;color:var(--accent)">
+            ${winners.length === 0 ? 'No viewer squares on the line' : `Winner${winners.length === 1 ? '' : 's'}`}</div>
+          ${winners
+            .map(
+              (w) => `
+            <div class="row" style="padding:10px 0;font-size:26px">
+              <span class="mono" style="color:var(--gold);width:56px;flex-shrink:0">${escapeHtml(w.squareId)}</span>
+              <span class="grow truncate">@${escapeHtml(w.username)}</span>
+              <span class="mono truncate" style="color:var(--muted);font-size:21px">${escapeHtml(w.slotName ?? '')}</span>
+            </div>`,
+            )
+            .join('')}
+        </div>
+
+        <div class="mono" style="font-size:22px;color:var(--muted);margin-top:24px">
+          ${state.squaresPlayed ?? 0} squares played ·
+          ${money(state.totalSpent ?? 0, currency)} in ·
+          ${money(state.totalReturned ?? 0, currency)} out ·
+          <span style="color:${(state.netPosition ?? 0) >= 0 ? 'var(--win)' : 'var(--loss)'}">
+            ${signed(state.netPosition ?? 0, currency)}</span>
+        </div>
+      </div>
+    </div>`
+}
+
 // ─── shared ─────────────────────────────────────────────────────────────────
 
 function stat(label, value, colour, size) {
@@ -582,7 +925,7 @@ function banner(text, colour, sub) {
 setInterval(() => {
   const node = document.getElementById('countdown')
   if (!node) return
-  const ends = state.guessWindowEndsAt ?? state.votingEndsAt
+  const ends = state.guessWindowEndsAt ?? state.votingEndsAt ?? state.joinWindowEndsAt
   node.textContent = countdown(ends) ?? '00:00'
 }, 250)
 </script>

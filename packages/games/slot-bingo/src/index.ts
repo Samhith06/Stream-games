@@ -214,6 +214,9 @@ export const slotBingo: GameModule<BingoState, BingoConfig> = {
    */
   projectDashboard(state) {
     return {
+      // The dashboard is the overlay plus the controls — spreading rather than
+      // replacing, or the board and the lines never reach the streamer's screen.
+      ...(this.project(state) as Record<string, unknown>),
       pool: state.pool.map(poolRow),
       standby: state.standby.map(poolRow),
       reservedUserIds: state.reservedUserIds,
