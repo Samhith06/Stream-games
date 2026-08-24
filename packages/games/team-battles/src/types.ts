@@ -211,7 +211,13 @@ export const battlesConfigSchema = z
     poolCap: z.number().int().min(2).max(500).nullable().default(null),
     reentryAfterPicks: z.number().int().min(1).max(20).nullable().default(null),
 
-    sideGate: z.enum(['anyone', 'followers', 'subscribers']).default('anyone'),
+    /**
+     * Who may declare an allegiance in chat.
+     *
+     * `nobody` turns `!side` off entirely, which only makes sense alongside
+     * `autoSideOnJoin` — the crowd layer then runs on assignment alone.
+     */
+    sideGate: z.enum(['anyone', 'followers', 'subscribers', 'nobody']).default('anyone'),
     /**
      * Put everyone who enters the pool on a side, if they haven't picked one.
      *
@@ -303,6 +309,22 @@ export const battlesConfigSchema = z
 
     // Locking allegiance after the session ends is the same as never locking,
     // but it reads as a rule that exists — so say what it actually is.
+    /*
+     * Nobody may pick and nobody is assigned: the crowd bar would sit empty all
+     * session and half of §7 would be dead weight on the overlay. Refused
+     * rather than warned about, on the same principle as the other refusals
+     * here — a setting that silently does nothing is worse than one that says
+     * no.
+     */
+    if (config.sideGate === 'nobody' && !config.autoSideOnJoin) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['sideGate'],
+        message:
+          'If no one can declare a side, turn on automatic assignment — otherwise no viewer is ever on a team.',
+      })
+    }
+
     if (config.sideLockAtPick !== null && config.sideLockAtPick > config.maxPicks) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

@@ -234,6 +234,14 @@ function declareSide(
   const actor = event.actor
   const raw = (event.args ?? '').trim().toLowerCase()
 
+  /*
+   * The router already switches the command off, so this should be
+   * unreachable. Kept because the reducer is the thing replayed from the log,
+   * and a config change between a session's start and a later replay must not
+   * be able to let a declaration in through the back door.
+   */
+  if (ctx.config.sideGate === 'nobody') return { state, effects: [] }
+
   if (state.sidesLocked) {
     return {
       state,

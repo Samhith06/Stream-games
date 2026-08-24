@@ -446,7 +446,8 @@ function battlesFields() {
 
     { title: 'Picking a side', icon: 'diversity_3', rows: [
       { k: 'sideGate', label: 'Who can declare a side?', type: 'segment',
-        options: [['anyone','Anyone'],['followers','Followers'],['subscribers','Subs']] },
+        options: [['anyone','Anyone'],['followers','Followers'],['subscribers','Subs'],['nobody','No one']] },
+      { note: 'No one turns !side off completely — every viewer is put on a team by the draw and nobody argues with it. It needs automatic assignment switched on below, or nobody ends up on a team at all.' },
       { note: 'Anyone in chat can back a team, drawn or not. A declaration is permanent for the session — allegiance that can switch is not allegiance, and the reward at the end becomes a prize for correct timing. Sides lock at the halfway pick so nobody reads the scoreboard late and piles onto the winner.' },
       { k: 'autoSideOnJoin', label: 'Put entrants on a side automatically', type: 'toggle',
         hint: 'When someone enters the pool without having picked a side, assign them one. Off by default: an allegiance someone chose is the thing that makes the comeback matter. It also mutes the "they called Fortune and the coin said Chaos" callout for those viewers, since an assigned side was never their prediction.' },

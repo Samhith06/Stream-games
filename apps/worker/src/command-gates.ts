@@ -23,12 +23,29 @@ export const GATED_COMMANDS: Record<string, string> = {
   sideGate: 'side',
 }
 
+/**
+ * The gate value meaning "no viewer runs this at all".
+ *
+ * Not a role, so it cannot be expressed as one — it turns the command off
+ * instead. Team Battles uses it to run the crowd layer purely on assignment:
+ * everyone who enters gets a side and nobody argues with it.
+ */
+export const NOBODY = 'nobody'
+
 /** The command settings a session's config implies. */
-export function gatesFor(config: Record<string, unknown>): Record<string, { gate: string }> {
-  const settings: Record<string, { gate: string }> = {}
+export function gatesFor(
+  config: Record<string, unknown>,
+): Record<string, { enabled?: boolean; gate?: string }> {
+  const settings: Record<string, { enabled?: boolean; gate?: string }> = {}
+
   for (const [key, command] of Object.entries(GATED_COMMANDS)) {
     const gate = config[key]
-    if (typeof gate === 'string' && gate !== '') settings[command] = { gate }
+    if (typeof gate !== 'string' || gate === '') continue
+
+    // Disabled rather than gated to an impossible role, so the router's own
+    // "this command is off" path handles it and the denial reads correctly.
+    settings[command] = gate === NOBODY ? { enabled: false } : { gate }
   }
+
   return settings
 }

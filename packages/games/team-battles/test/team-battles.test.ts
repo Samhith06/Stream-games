@@ -351,6 +351,19 @@ test('a side lock after the last pick is refused rather than silently ignored', 
   assert.throws(() => battlesConfigSchema.parse({ maxPicks: 10, sideLockAtPick: 12 }), /lower number/)
 })
 
+test('nobody picking and nobody assigned is refused', () => {
+  // Otherwise the crowd bar sits empty all session and half of §7 is dead
+  // weight on the overlay — a setting that silently does nothing.
+  assert.throws(
+    () => battlesConfigSchema.parse({ sideGate: 'nobody' }),
+    /automatic assignment/,
+  )
+
+  const ok = battlesConfigSchema.parse({ sideGate: 'nobody', autoSideOnJoin: true })
+  assert.equal(ok.sideGate, 'nobody')
+  assert.equal(ok.autoSideOnJoin, true)
+})
+
 test('custom teams need both names', () => {
   assert.throws(() => battlesConfigSchema.parse({ teamPreset: 'custom', teamAName: 'Solo' }), /both names/)
 })

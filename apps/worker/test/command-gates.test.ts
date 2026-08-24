@@ -73,6 +73,20 @@ test('an unset gate leaves the command alone', () => {
   assert.equal(settings.sr, undefined)
 })
 
+test("'nobody' switches the command off rather than gating it to a role", () => {
+  // It is not a role, so it cannot be one. Disabling routes it through the
+  // router's own "this command is off" path and the denial reads correctly.
+  const settings = gatesFor({ sideGate: 'nobody' })
+
+  assert.deepEqual(settings.side, { enabled: false })
+  assert.equal(settings.side!.gate, undefined, 'no impossible role is invented')
+})
+
+test('a real role still gates rather than disables', () => {
+  const settings = gatesFor({ sideGate: 'subscribers' })
+  assert.deepEqual(settings.side, { gate: 'subscribers' })
+})
+
 test('Team Battles offers a side gate, and it is wired', () => {
   // The specific regression. §7 gates who may declare an allegiance.
   const battles = games.find((g) => g.id === 'team-battles')!

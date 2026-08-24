@@ -358,6 +358,31 @@ test('an assigned side can still be replaced by a real choice', () => {
   assert.ok(chatTexts(twice.effects).some((t) => t.includes('already with')))
 })
 
+test('with sideGate nobody, a declaration is refused even if it reaches the game', () => {
+  /*
+   * The router switches !side off, so this should never arrive. Asserted at the
+   * reducer anyway: the log is what gets replayed, and a config edited between
+   * a session's start and a later replay must not let one in the back door.
+   */
+  const { state } = run([...poolOf(2), sideCmd('p0', 'fortune')], {
+    sideGate: 'nobody',
+    autoSideOnJoin: true,
+  })
+
+  assert.ok(state.sides['u-p0']?.auto, 'they keep the side they were assigned')
+  assert.equal(state.sides['u-p0']!.team !== undefined, true)
+})
+
+test('everyone still lands on a team with picking switched off', () => {
+  const { state } = run([...poolOf(6)], { sideGate: 'nobody', autoSideOnJoin: true })
+
+  assert.equal(Object.keys(state.sides).length, 6)
+  assert.ok(Object.values(state.sides).every((s) => s.auto))
+
+  const projected = teamBattles.project(state) as Record<string, any>
+  assert.equal(projected.crowdA + projected.crowdB, 6, 'and the crowd bar has something to show')
+})
+
 // ─── §8.1 / §16: results ────────────────────────────────────────────────────
 
 test('the multiplier is computed from the two numbers entered', () => {
