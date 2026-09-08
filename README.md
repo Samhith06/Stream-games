@@ -364,27 +364,39 @@ repo in each service's settings would make a push enough, and is worth doing the
 next time somebody is in there.
 
 Four services in one project: **Postgres**, **Redis**, **web**, **worker**. Both
-app services deploy from this repo and this Dockerfile — they differ only in
-start command, which is why there are two config files:
+app services deploy from this repo, this Dockerfile and the **one** root
+`railway.json` — there is no per-service config file and no per-service start
+command. What differs is a single variable:
 
-| Service | Settings → Config-as-code path |
-|---|---|
-| web | *(none — Railway picks up `railway.json` at the root by itself)* |
-| worker | `railway.worker.json` |
+```
+SERVICE=web        # HTTP, WebSocket, the dashboard and overlay
+SERVICE=worker     # game logic, Kick calls, timers, queues
+```
 
-The web service needs no setting because Railway reads root `railway.json`
-automatically. The worker is the one that has to be pointed elsewhere, or it
-would inherit the web start command and run migrations a second time.
+`scripts/start.mjs` reads it and imports the matching entrypoint. A variable
+rather than a start command, because Railway's start command and config-file
+path are per-service dashboard settings with no API in the CLI, while variables
+are scriptable — so the whole deployment stays reproducible from a terminal.
+Set `SERVICE` wrong and you get two copies of the same process, which looks
+like a healthy deploy where chat commands are silently never handled.
 
-`railway.web.json` runs migrations as its pre-deploy command, so the schema is
-applied once per release before the new container takes traffic. The worker has
-no pre-deploy step — running migrations from two services races them.
+Two consequences of sharing one config, both deliberate rather than tolerated:
+
+- **The healthcheck applies to both**, so the worker runs a tiny `node:http`
+  server on `/healthz` purely to answer it (`apps/worker/src/health.ts`). That
+  is worth having on its own: a worker that has lost Redis looks exactly like an
+  idle channel, and without a probe nobody finds out until chat piles up.
+- **The pre-deploy migration runs on both**, and that is safe. `node scripts/db.mjs
+  release` takes a Postgres advisory lock before reading the applied set, so the
+  second runner waits and then finds nothing to do rather than replaying a
+  migration and failing the release.
 
 Set on **both** app services (Railway's `${{...}}` references keep the
 datastore URLs correct if a database is ever replaced):
 
 ```
 NODE_ENV=production
+SERVICE=web                       # …and SERVICE=worker on the other one
 DATABASE_URL=${{Postgres.DATABASE_URL}}
 REDIS_URL=${{Redis.REDIS_URL}}
 TOKEN_ENCRYPTION_KEY=…
