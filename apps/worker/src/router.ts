@@ -46,44 +46,78 @@ async function handleKickEvent(
   const event = normalise(job.eventType, job.payload)
   if (!event) return
 
-  // ── 3. Route. Most traffic dies here, on one Redis GET. ───────────────────
-  const sessionId = await ctx.cache.sessionIdForChannel(event.broadcasterUserId)
-  if (!sessionId) {
+  // ── 3. Route. Most traffic dies here, on one Redis MGET. ─────────────────
+  //
+  // A channel has two slots: one `exclusive` game and one `companion` (a
+  // giveaway running inside a bonus hunt). Both are read together because a
+  // chat line has to be offered to both before it can be dropped, and the
+  // common answer — neither slot filled — costs the same one round trip it
+  // always did.
+  const slots = await ctx.cache.sessionsForChannel(event.broadcasterUserId)
+  if (!slots.exclusive && !slots.companion) {
     await bumpQuota(ctx, null, { deliveries: 1, dropped: 1 })
     return
   }
 
-  const meta = await ctx.cache.meta(sessionId)
-  if (!meta) {
-    ctx.log.warn({ sessionId }, 'session pointer with no metadata; clearing')
-    await ctx.redis.del(`channel:${event.broadcasterUserId}:session`)
-    return
-  }
+  const metas = await resolveMetas(ctx, event.broadcasterUserId, slots)
+  if (metas.length === 0) return
 
-  await bumpQuota(ctx, meta.channelId, { deliveries: 1 })
+  // One delivery, counted once, however many sessions it is offered to. The
+  // quota Kick charges is per webhook, not per session.
+  await bumpQuota(ctx, metas[0]!.channelId, { deliveries: 1 })
 
   if (event.kind !== 'chat') {
-    // A platform event the active game asked for. Games opt in through
-    // `subscriptions`, so if we're receiving it, somebody wants it.
-    await applyEvent(ctx, meta, {
-      type: event.kind === 'subscription' ? 'channel.subscription' : 'channel.kicks',
-      at: job.receivedAt,
-      actor: event.actor,
-      payload: event.payload,
-    })
+    /*
+     * A platform event a running game asked for. Games opt in through
+     * `subscriptions`, and the subscription is per channel rather than per
+     * session, so with two sessions running it is delivered to whichever of
+     * them actually declared it — never to both by default, and never to a
+     * game that did not ask.
+     */
+    const type = event.kind === 'subscription' ? 'channel.subscription' : 'channel.kicks'
+    for (const meta of metas) {
+      if (!declaresKickEvent(ctx, meta, job.eventType)) continue
+      await applyEvent(ctx, meta, {
+        type,
+        at: job.receivedAt,
+        actor: event.actor,
+        payload: event.payload,
+      })
+    }
     return
   }
 
   // ── 4. Parse. One charAt before anything allocates. ───────────────────────
   if (!looksLikeCommand(event.text)) {
-    await bumpQuota(ctx, meta.channelId, { dropped: 1 })
+    await bumpQuota(ctx, metas[0]!.channelId, { dropped: 1 })
     return
   }
 
-  const registry = commandRegistryFor(ctx, meta)
-  const parsed = registry.parse(event.text)
-  if (!parsed) {
-    await bumpQuota(ctx, meta.channelId, { dropped: 1 })
+  /*
+   * A keyword belongs to exactly one session.
+   *
+   * `metas` is ordered exclusive-first, so on the collision the runtime cannot
+   * prevent — a game whose keywords changed after the companion started — the
+   * long-running game keeps its command and the giveaway loses it. That is the
+   * right way round: the giveaway's keyword is themeable and three minutes old,
+   * the bonus hunt's `!sr` has been the channel's vocabulary for an hour.
+   *
+   * Creation-time validation makes this nearly unreachable; see the collision
+   * check in `apps/web/src/routes/sessions.ts`.
+   */
+  let meta: SessionMeta | undefined
+  let parsed: ReturnType<CommandRegistry['parse']> = null
+  for (const candidate of metas) {
+    const hit = commandRegistryFor(ctx, candidate).parse(event.text)
+    if (hit) {
+      meta = candidate
+      parsed = hit
+      break
+    }
+  }
+
+  if (!meta || !parsed) {
+    await bumpQuota(ctx, metas[0]!.channelId, { dropped: 1 })
     return
   }
 
@@ -153,6 +187,44 @@ async function handleControl(
     payload: job.payload,
     actor: job.actor as Actor,
   })
+}
+
+/**
+ * Both slots' metadata, exclusive first, with dead pointers swept as we go.
+ *
+ * A pointer with no metadata behind it is a session whose cache entry expired
+ * or whose worker died between writing the pointer and writing the meta.
+ * Clearing it here rather than logging and moving on is what stops a channel
+ * from being permanently un-routable until someone notices.
+ */
+async function resolveMetas(
+  ctx: WorkerContext,
+  broadcasterUserId: string,
+  slots: { exclusive: string | null; companion: string | null },
+): Promise<SessionMeta[]> {
+  const out: SessionMeta[] = []
+
+  for (const [slot, sessionId] of [
+    ['session', slots.exclusive],
+    ['companion', slots.companion],
+  ] as const) {
+    if (!sessionId) continue
+    const meta = await ctx.cache.meta(sessionId)
+    if (meta) {
+      out.push(meta)
+      continue
+    }
+    ctx.log.warn({ sessionId, slot }, 'session pointer with no metadata; clearing')
+    await ctx.redis.del(`channel:${broadcasterUserId}:${slot}`)
+  }
+
+  return out
+}
+
+/** Did this game actually ask for this Kick event type? */
+function declaresKickEvent(ctx: WorkerContext, meta: SessionMeta, eventType: string): boolean {
+  const game = ctx.registry.get(meta.gameId)
+  return game ? (game.subscriptions as readonly string[]).includes(eventType) : false
 }
 
 /**

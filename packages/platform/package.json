@@ -27,6 +27,7 @@
     "pino": "^9.6.0",
     "zod": "^3.24.1",
     "@streamarena/game-slot-bingo": "1.0.0",
-    "@streamarena/game-team-battles": "1.0.0"
+    "@streamarena/game-team-battles": "1.0.0",
+    "@streamarena/game-giveaways": "1.0.0"
   }
 }

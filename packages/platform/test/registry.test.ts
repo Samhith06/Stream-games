@@ -84,7 +84,16 @@ test('no two games claim the same command keyword', () => {
   )
 })
 
-/** Bonus Hunt has one required field with no sensible default (§13). */
+/**
+ * The two games with a required field nobody can default for them.
+ *
+ * Bonus Hunt's starting balance is §13's — only the streamer knows it.
+ * Giveaways' prize list is the same shape of fact: a giveaway with no prize is
+ * not a giveaway with an empty default, it is a form that has not been filled
+ * in, and the schema says so rather than inventing "Prize 1".
+ */
 function defaultsFor(gameId: string): Record<string, unknown> {
-  return gameId === 'bonus-hunt' ? { startBalance: 1000 } : {}
+  if (gameId === 'bonus-hunt') return { startBalance: 1000 }
+  if (gameId === 'giveaways') return { prizes: [{ title: 'Contract test prize' }] }
+  return {}
 }

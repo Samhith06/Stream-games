@@ -75,7 +75,7 @@ setGameTheme(gameId)
 
 document.getElementById('title').textContent = `${gameName(gameId)} Setup`
 document.getElementById('submit-label').textContent =
-  gameId === 'bonus-hunt' ? 'Start Hunt' : 'Open Joining'
+  gameId === 'bonus-hunt' ? 'Start Hunt' : gameId === 'giveaways' ? 'Open Entry' : 'Open Joining'
 
 const saved = await api(`/api/games/${gameId}/config`)
 const cfg = { ...saved.config }
@@ -88,7 +88,9 @@ const FIELDS =
       ? bingoFields()
       : gameId === 'team-battles'
         ? battlesFields()
-        : tournamentFields()
+        : gameId === 'giveaways'
+          ? giveawayFields()
+          : tournamentFields()
 render()
 
 function render() {
@@ -235,6 +237,25 @@ function row(f) {
       </div>`
   }
 
+  /*
+   * A note whose text is recomputed on every render rather than written once.
+   *
+   * Giveaways §15 asks the setup screen to *compute and show* the usable window
+   * and the claim floor rather than leaving them to the streamer, and both
+   * change every time a slider moves. A static hint saying "remember your
+   * stream delay" is the version of this that does not work.
+   */
+  if (f.live) {
+    const { tone, text } = delayNote(f.live)
+    return liveNote(tone, text, `live-${f.live}`)
+  }
+
+  /* §10.1 — what the chosen gate will actually do, said where it is chosen. */
+  if (f.gateNote) {
+    const { tone, text } = gateNote()
+    return liveNote(tone, text, 'live-gate')
+  }
+
   const value = f.policy ? policy[f.k] : cfg[f.k]
   const span = f.half ? '' : 'md:col-span-2'
   const hint = f.hint
@@ -294,6 +315,48 @@ function row(f) {
         }`
       break
     }
+    /*
+     * The entry keyword — Giveaways §5, "the most themeable string in the
+     * product", stored bare with the prefix supplied by the parser.
+     *
+     * The live preview matters more than it looks: this string ends up on the
+     * overlay at the largest size the layout allows, and it is the only thing a
+     * viewer arriving mid-window has to read. Seeing it rendered as chat will
+     * see it is the cheapest way to catch a typo before 800 people copy it.
+     */
+    case 'keyword':
+      field = `<div class="flex items-center gap-sm">
+          <div class="relative flex-1">
+            <span class="absolute left-md top-1/2 -translate-y-1/2 font-data-mono text-primary font-bold">!</span>
+            <input data-k="${f.k}" data-t="keyword" type="text" maxlength="24" value="${escapeHtml(value ?? 'drop')}"
+              class="input-dark w-full rounded pl-8 pr-md py-sm font-data-mono h-12">
+          </div>
+          <div class="px-md h-12 flex items-center rounded bg-surface-container-lowest border border-outline-variant
+                      font-data-mono text-primary" data-out="keyword-preview">!${escapeHtml(value ?? 'drop')}</div>
+        </div>`
+      break
+
+    /*
+     * The prize list — §9, "a title, an optional description, an optional
+     * image, and an order. That is the entire model."
+     *
+     * Order is the load-bearing part and the only reason this is a list rather
+     * than a field: prizes are revealed in it, smallest first, so the row a
+     * prize sits on is a directorial decision, not data entry.
+     */
+    case 'prizes': {
+      const prizes = Array.isArray(value) && value.length > 0 ? value : [{ title: '', description: null }]
+      field = `<div class="flex flex-col gap-sm" data-prizes>
+          ${prizes.map((prize, i) => prizeRow(prize, i, prizes.length)).join('')}
+          <button type="button" data-prize-add
+            class="flex items-center justify-center gap-sm py-sm px-md rounded-lg border border-dashed
+                   border-outline-variant hover:border-primary/60 hover:bg-primary/5 text-sm font-medium
+                   text-primary transition-colors">
+            <span class="material-symbols-outlined text-[18px]">add</span>Add another prize
+          </button>
+        </div>`
+      break
+    }
     case 'segment':
       field = `<div class="flex flex-wrap gap-xs bg-surface-container-lowest p-1 rounded-lg border border-outline-variant">
         ${f.options.map(([v, text], i) => `
@@ -320,6 +383,52 @@ function row(f) {
   }
 
   return `<div class="${span}">${label}${field}${hint}</div>`
+}
+
+
+/**
+ * A note that is recomputed rather than written — see the `live` row type.
+ *
+ * Gold rather than red for the warning tone, on the same rule the win-metric
+ * warning follows: these are legitimate choices with a consequence the streamer
+ * has to see while choosing, not errors.
+ */
+function liveNote(tone, text, id) {
+  return tone === 'warn'
+    ? `<div id="${id}" class="md:col-span-2 bg-gold/10 border-l-4 border-gold rounded-r-lg p-sm
+                              text-[13px] text-on-surface leading-relaxed flex gap-sm">
+         <span class="material-symbols-outlined text-gold text-[18px] shrink-0">warning</span>
+         <span>${escapeHtml(text)}</span>
+       </div>`
+    : `<div id="${id}" class="md:col-span-2 bg-surface-container border-l-4 border-primary rounded-r-lg p-sm
+                              text-[13px] text-on-surface-variant leading-relaxed">${escapeHtml(text)}</div>`
+}
+
+/** One row of the prize list. `index` is the reveal order and is shown as one. */
+function prizeRow(prize, index, total) {
+  return `<div class="flex items-start gap-sm p-sm bg-surface-container-low rounded-lg
+                      border border-outline-variant/50" data-prize-row="${index}">
+      <div class="w-8 h-8 shrink-0 mt-1 rounded-md bg-surface-container-lowest border border-outline-variant
+                  flex items-center justify-center font-data-mono text-sm
+                  ${index === total - 1 && total > 1 ? 'text-gold border-gold/40' : 'text-on-surface-variant'}">
+        ${index + 1}
+      </div>
+      <div class="flex-1 flex flex-col gap-xs min-w-0">
+        <input data-prize-title="${index}" type="text" maxlength="80" value="${escapeHtml(prize.title ?? '')}"
+          placeholder="Prize title — what you will say out loud"
+          class="input-dark w-full rounded px-sm py-xs font-body-md">
+        <input data-prize-desc="${index}" type="text" maxlength="240" value="${escapeHtml(prize.description ?? '')}"
+          placeholder="Optional detail"
+          class="bg-transparent w-full px-sm py-xs text-sm text-on-surface-variant
+                 border-b border-transparent focus:border-outline-variant focus:outline-none">
+      </div>
+      ${total > 1
+        ? `<button type="button" data-prize-remove="${index}" title="Remove"
+             class="shrink-0 mt-1 w-8 h-8 rounded-md flex items-center justify-center
+                    text-on-surface-variant hover:text-error hover:bg-error/10 transition-colors">
+             <span class="material-symbols-outlined text-[18px]">delete</span></button>`
+        : ''}
+    </div>`
 }
 
 // ─── binding ────────────────────────────────────────────────────────────────
@@ -383,6 +492,102 @@ function bind() {
       set(k, box.checked ? null : Number(range.value) * Number(range.dataset.div), false)
     })
   }
+
+  /*
+   * The keyword. Bare in the config, prefix supplied by the parser — a leading
+   * '!' the streamer types anyway would otherwise produce a '!!drop' nobody in
+   * chat can reach, so it is stripped here as well as on the server.
+   */
+  for (const el of document.querySelectorAll('[data-t="keyword"]')) {
+    el.addEventListener('input', () => {
+      const clean = el.value.trim().replace(/^!+/, '')
+      const preview = document.querySelector('[data-out="keyword-preview"]')
+      if (preview) preview.textContent = `!${clean || 'drop'}`
+      set(el.dataset.k, clean, false)
+    })
+  }
+
+  bindPrizes()
+}
+
+/**
+ * The prize list.
+ *
+ * Rebinding the whole block after a structural change rather than tracking rows
+ * individually: the list is at most twenty rows and a prize's index *is* its
+ * reveal order, so an add or a remove renumbers everything after it anyway.
+ */
+function bindPrizes() {
+  const host = document.querySelector('[data-prizes]')
+  if (!host) return
+
+  const prizes = () => (Array.isArray(cfg.prizes) && cfg.prizes.length > 0 ? cfg.prizes : [{ title: '', description: null }])
+
+  const redraw = (next) => {
+    cfg.prizes = next
+    host.innerHTML =
+      next.map((prize, i) => prizeRow(prize, i, next.length)).join('') +
+      `<button type="button" data-prize-add
+         class="flex items-center justify-center gap-sm py-sm px-md rounded-lg border border-dashed
+                border-outline-variant hover:border-primary/60 hover:bg-primary/5 text-sm font-medium
+                text-primary transition-colors">
+         <span class="material-symbols-outlined text-[18px]">add</span>Add another prize
+       </button>`
+    bindPrizes()
+    summarise()
+  }
+
+  for (const el of host.querySelectorAll('[data-prize-title]')) {
+    el.addEventListener('input', () => {
+      const list = prizes().slice()
+      list[Number(el.dataset.prizeTitle)] = { ...list[Number(el.dataset.prizeTitle)], title: el.value }
+      cfg.prizes = list
+      summarise()
+    })
+  }
+
+  for (const el of host.querySelectorAll('[data-prize-desc]')) {
+    el.addEventListener('input', () => {
+      const list = prizes().slice()
+      const i = Number(el.dataset.prizeDesc)
+      list[i] = { ...list[i], description: el.value.trim() === '' ? null : el.value }
+      cfg.prizes = list
+    })
+  }
+
+  host.querySelector('[data-prize-add]')?.addEventListener('click', () => {
+    redraw([...prizes(), { title: '', description: null }])
+  })
+
+  for (const el of host.querySelectorAll('[data-prize-remove]')) {
+    el.addEventListener('click', () => {
+      // At least one prize always remains — a giveaway with nothing to give
+      // away is a form that has not been filled in, not a valid session.
+      const list = prizes().filter((_, i) => i !== Number(el.dataset.prizeRemove))
+      redraw(list.length > 0 ? list : [{ title: '', description: null }])
+    })
+  }
+}
+
+/**
+ * Repaint the notes that quote a number the streamer is currently dragging.
+ *
+ * §15 wants the usable window and the claim floor to move with the slider, and
+ * the slider handler only knows it changed a config key — so the recompute is
+ * driven from `summarise()`, which already runs on every change.
+ */
+function repaintLiveNotes() {
+  if (gameId !== 'giveaways') return
+
+  for (const [id, next] of [
+    ['live-entry', delayNote('entry')],
+    ['live-claim', delayNote('claim')],
+    ['live-gate', gateNote()],
+  ]) {
+    const el = document.getElementById(id)
+    if (!el) continue
+    el.outerHTML = liveNote(next.tone, next.text, id)
+  }
 }
 
 /**
@@ -407,6 +612,141 @@ function bingoSummary() {
     ['Free centre', cfg.freeCentre ? 'On' : 'Off'],
     ['Who can join', label(cfg.joinGate)],
     ['Opening window', cfg.joinWindowMs === null ? 'Manual close' : `${Math.round(cfg.joinWindowMs / 60000)} minutes`],
+  ]
+}
+
+/**
+ * Giveaways — §15.
+ *
+ * "Three things the config screen must compute and show live, rather than
+ * leaving to the streamer": the usable entry window at this channel's stream
+ * delay, the claim window floor, and the odds preview under weighting. Two of
+ * the three are clocks, and both are rendered by `delayNote()` rather than
+ * written into a hint — §2 is a number that has to move while the slider does,
+ * not a paragraph a streamer reads once and forgets.
+ */
+function giveawayFields() {
+  return [
+    { title: 'Prizes', icon: 'redeem', rows: [
+      { k: 'prizes', label: 'Prize list', type: 'prizes' },
+      { note: 'Prizes are drawn one at a time, in this order, and the last one on the list is the last one revealed. Put the best prize at the bottom — revealing it first makes everything after it an anticlimax.' },
+      { warn: 'A prize here is a title and a record of who won it. StreamArena never holds, generates, stores or sends anything a prize consists of — no codes, no balances, no transfers. You settle with the winner yourself.' },
+    ]},
+
+    { title: 'Entry', icon: 'how_to_reg', rows: [
+      { k: 'keyword', label: 'Entry keyword', type: 'keyword' },
+      { note: 'Set it to whatever you are about to say out loud — a keyword that matches the words coming out of your mouth converts better than a generic one. It also has to differ from every command the game running underneath it already uses.' },
+      { k: 'entryWindowMs', label: 'Entry window', type: 'seconds', max: 600 },
+      { live: 'entry' },
+      { k: 'entryGate', label: 'Who can enter?', type: 'segment',
+        options: [['anyone','Anyone'],['followers','Followers'],['subscribers','Subs']] },
+      { gateNote: true },
+    ]},
+
+    { title: 'The draw', icon: 'casino', rows: [
+      { note: 'The order is fixed the moment you open entry, before anyone has typed, and a fingerprint of the seed goes to chat straight away. A prize that goes unclaimed moves to the next name on that same list. There is no re-draw button in this product, at any privilege level, in any phase — its absence is what makes the fingerprint worth posting.' },
+      { k: 'weightMode', label: 'Weighting', type: 'segment',
+        options: [['flat','Flat — one each'],['role','By role']] },
+      { note: 'Flat is the default and usually the right answer. Weighting is capped at 5x because heavy weighting suppresses the entry count, and the entry count is the only number this game produces: a giveaway 200 people enter is better than one 60 people enter for a prize weighted toward the 60. If you genuinely want to reward subs, run a subs-only session — it is honest, and it does not ask non-subs to enter something they have been told they will lose.' },
+      { k: 'reelMs', label: 'Reel length', type: 'seconds', max: 10 },
+    ]},
+
+    { title: 'Claiming', icon: 'timer', rows: [
+      { k: 'claimWindowMs', label: 'Claim window', type: 'seconds', max: 600 },
+      { live: 'claim' },
+      { note: 'The winner types !claim. Their clock starts when the announcement reaches chat, not when the reel stops, so the stream delay is not spent before they can possibly know they won. The floor moves with your delay for the same reason.' },
+      { k: 'maxPassovers', label: 'Passovers allowed', type: 'stepper', half: true,
+        hint: 'How many times an unclaimed prize moves to the next name before it stops and asks you. At a normal claim rate, three settles about 99 prizes in 100 without you having to make a call.' },
+      { k: 'allowPreviousWinners', label: 'Let a winner win again', type: 'toggle',
+        hint: 'Off by default, which spreads a three-prize session across three people instead of concentrating it in one. On, the top of the committed order takes every prize.' },
+      { k: 'announceWinnerInChat', label: 'Announce the winner in chat', type: 'toggle',
+        hint: 'Leave this on. With it off, a winner who is not looking at the overlay has no way of learning they won and the claim rate collapses — it exists only for streamers who read winners out loud themselves.' },
+    ]},
+
+    { title: 'Fairness', icon: 'verified_user', rows: [
+      { k: 'publishSeed', label: 'Publish the seed at the end', type: 'toggle',
+        hint: 'Posts the fingerprint when entry opens and the seed itself when the session ends. Anyone can then recompute the whole result and check the order was fixed before the first entry landed.' },
+      { k: 'verificationPageEnabled', label: 'Public verification page', type: 'toggle',
+        hint: 'A permanent link showing the seed, the full entry list in join order, the resulting order, and the draw function in plain terms. It turns "prove it" into a URL.' },
+    ]},
+
+    { title: 'Bot & Chat', icon: 'smart_toy', rows: chatRows() },
+  ]
+}
+
+/**
+ * §15 — the usable entry window, rendered live.
+ *
+ * "180s window · about 155s of real time for a viewer on a 20s delay." This is
+ * §2 as a figure that moves while the streamer drags the slider, and it is the
+ * single most useful thing this screen can say: a viewer's usable window is the
+ * announced window minus their stream delay minus reaction time, and a streamer
+ * who has never seen that arithmetic will cheerfully set thirty seconds and
+ * exclude everyone on a phone.
+ */
+function delayNote(kind) {
+  const delay = Math.round((policy.streamDelayMs ?? 12000) / 1000)
+
+  if (kind === 'entry') {
+    const window = Math.round((cfg.entryWindowMs ?? 180000) / 1000)
+    const usable = Math.max(0, window - delay - 5)
+    return usable === 0
+      ? { tone: 'warn', text: `On your ${delay}s delay this window gives a viewer no usable time at all. They will type, be rejected as late, and conclude the giveaway was over before they saw it start.` }
+      : { tone: 'note', text: `${fmtClock(window)} window · about ${fmtClock(usable)} of real time for a viewer on your ${delay}s delay.` }
+  }
+
+  const window = Math.round((cfg.claimWindowMs ?? 180000) / 1000)
+  const floor = delay + 60
+  return window < floor
+    ? { tone: 'warn', text: `Too short. On a ${delay}s delay the floor is ${fmtClock(floor)} — below that the winner has under a minute of real time to see the message and type the command. This will be refused when you open entry.` }
+    : { tone: 'note', text: `${fmtClock(window)} claim window · about ${fmtClock(Math.max(0, window - delay))} of real time for the winner on your ${delay}s delay.` }
+}
+
+/*
+ * A declaration rather than a const arrow, deliberately.
+ *
+ * `render()` runs at module top level and reaches this through `delayNote()`,
+ * so a const would still be in its temporal dead zone and the whole setup
+ * screen would throw before drawing a single field. `client-scope.test.ts`
+ * exists because that exact bug shipped once already.
+ */
+function fmtClock(secs) {
+  return secs >= 60 ? `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}` : `${secs}s`
+}
+
+/**
+ * §10.1 — the guard that is configured and does not run.
+ *
+ * Kick's chat payload carries no follower badge and its public API exposes no
+ * follow timestamp or account creation date, so a followers gate accepts
+ * everyone. That has to be said on the screen where the streamer is choosing
+ * it: a streamer running a €500 prize who believes an alt-farm defence is in
+ * place, and is wrong, is the worst outcome this setting has.
+ */
+function gateNote() {
+  if (cfg.entryGate === 'subscribers') {
+    return { tone: 'note', text: 'Subscriber gating is the one gate Kick lets us check, because the badge is on the message. If a prize is genuinely valuable, this is the gate to use — Kick’s own payment rail does the verification for you.' }
+  }
+  if (cfg.entryGate === 'followers') {
+    return { tone: 'warn', text: 'Kick does not tell us who follows you, so this gate cannot be enforced and everyone will be accepted. The overlay will say “open to everyone” rather than claim a gate that is not running. Use subscribers if you need a real gate.' }
+  }
+  return { tone: 'note', text: 'Open to everyone, which is what a giveaway is for. The whole channel is in this one and the entry count is the only measure of whether it worked.' }
+}
+
+function giveawaySummary() {
+  const prizes = cfg.prizes ?? []
+  const delay = Math.round((policy.streamDelayMs ?? 12000) / 1000)
+  const window = Math.round((cfg.entryWindowMs ?? 180000) / 1000)
+
+  return [
+    ['Prize', prizes.length === 0 ? 'None set' : prizes.length === 1 ? (prizes[0].title || 'Untitled') : `${prizes.length} prizes`],
+    ['Keyword', `!${cfg.keyword ?? 'drop'}`],
+    ['Entry window', fmtClock(window)],
+    ['Real time for a viewer', fmtClock(Math.max(0, window - delay - 5))],
+    ['Who can enter', cfg.entryGate === 'followers' ? 'Followers (not enforceable)' : label(cfg.entryGate)],
+    ['Weighting', cfg.weightMode === 'role' ? 'By role' : 'Flat — one each'],
+    ['Claim window', fmtClock(Math.round((cfg.claimWindowMs ?? 180000) / 1000))],
+    ['Passovers', String(cfg.maxPassovers ?? 3)],
   ]
 }
 
@@ -524,6 +864,8 @@ function battlesSummary() {
 function summarise() {
   const rows = gameId === 'slot-bingo'
     ? bingoSummary()
+    : gameId === 'giveaways'
+    ? giveawaySummary()
     : gameId === 'team-battles'
     ? battlesSummary()
     : gameId === 'bonus-hunt'
@@ -546,6 +888,8 @@ function summarise() {
 
   rows.push(['Bot replies', label(policy.ackMode)])
   rows.push(['Stream delay', `${Math.round((policy.streamDelayMs ?? 0) / 1000)}s`])
+
+  repaintLiveNotes()
 
   $('#summary').innerHTML = rows.map(([k, v]) => `
     <li class="flex justify-between items-center gap-md">

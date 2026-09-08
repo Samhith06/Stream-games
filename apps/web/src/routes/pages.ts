@@ -71,6 +71,19 @@ export async function registerPageRoutes(app: FastifyInstance, ctx: WebContext) 
    */
   app.get('/overlay/:token', (_req, reply) => reply.sendFile('overlay.html'))
 
+  /**
+   * The giveaway verification page — Giveaways §3.
+   *
+   * Public and unauthenticated, and that is the entire point: a page only the
+   * streamer can open proves nothing to the chat that is accusing them. It sits
+   * here rather than in `PAGES` because everything in that map is a dashboard
+   * screen behind a session, and this is the one page in the product deliberately
+   * meant to be pasted into somebody else's chat.
+   *
+   * Everything behind it was designed to be published — the seed is only served
+   * once the session has ended, and `routes/verify.ts` refuses it before then.
+   */
+  app.get('/verify/:sessionId', (_req, reply) => reply.sendFile('verify.html'))
 
   /** Signed in goes to the catalog; everyone else to the login screen. */
   app.get('/', (req, reply) => {

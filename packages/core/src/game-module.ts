@@ -79,6 +79,29 @@ export interface GameModule<
   readonly tagline: string
 
   /**
+   * Whether this game can share a channel with another running session.
+   *
+   * The platform's rule was one session per channel, full stop (§6.3): more
+   * would mean holding subscriptions we cannot attribute and a chat command
+   * with two possible meanings. Giveaways is the case that argued the rule down
+   * to its actual content, because the thing that game most wants is to run
+   * *inside* another one — during the collection phase of a bonus hunt, between
+   * tournament rounds, while a team battle waits on a buy.
+   *
+   * So the constraint is now the narrower true one: **at most one `exclusive`
+   * session and at most one `companion` session per channel.** A companion is a
+   * game short enough and self-contained enough to sit on top of another
+   * without competing for the screen or the streamer's attention — it has its
+   * own overlay source, its own session, its own log, and it must not share a
+   * chat keyword with whatever else is running. The runtime enforces the
+   * keyword half at session creation; a companion that needed to reach into
+   * another game's state would not be a companion.
+   *
+   * Defaults to `exclusive`, which is what every game before Giveaways is.
+   */
+  readonly concurrency?: 'exclusive' | 'companion'
+
+  /**
    * Renders the dashboard settings form and validates the POSTed config.
    *
    * The input type is left open because config schemas use `.default()`, so

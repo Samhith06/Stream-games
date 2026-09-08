@@ -38,6 +38,11 @@ import { api, control, connect, attempt, toast, money, signed, multiplier, count
 import { mountShell } from './shell.js'
 import { bingoBoard, bingoJoining, bingoResult, lineRail } from './bingo-view.js'
 import { battlesJoining, battlesResult, ledger, pickCard, swingHero, teamColumns } from './battles-view.js'
+import {
+  claimHero, clock as gaClock, currentPrize, entryFeed, entryHero, exhaustedPanel,
+  lockedPanel, oddsPanel, orderPanel, prizeQueue, reelMirror, rejectionStrip,
+  sessionStats, verificationCard, winnersTable,
+} from './giveaways-view.js'
 
 const sessionId = requireSessionId()
 const me = await mountShell({ active: '/session' })
@@ -90,6 +95,12 @@ const socket = connect({
 
 draw()
 setInterval(() => { const el = $('#timer'); if (el) tickTimer(el) }, 250)
+/*
+ * Giveaways' two clocks tick locally between server patches — a countdown that
+ * only moved when an event arrived would sit still for whole seconds during the
+ * quietest part of the entry window and jump when someone finally typed.
+ */
+setInterval(() => { if (gameId === 'giveaways') tickGiveawayClocks() }, 500)
 
 // ─── render ─────────────────────────────────────────────────────────────────
 
@@ -101,7 +112,9 @@ function draw() {
         ? bingo()
         : gameId === 'team-battles'
           ? battles()
-          : tournament()
+          : gameId === 'giveaways'
+            ? giveaways()
+            : tournament()
   drawActionBar()
   wire()
   paintConnection()
@@ -1010,6 +1023,8 @@ function drawActionBar() {
       </div>`
   } else if (gameId === 'team-battles') {
     html = battlesActionBar(phase)
+  } else if (gameId === 'giveaways') {
+    html = giveawaysActionBar(phase)
   } else if (gameId === 'slot-tournament' && phase === 'joining') {
     html = `
       <div class="text-on-surface-variant font-data-mono text-sm">
@@ -1052,6 +1067,8 @@ function showCue(kind, payload) {
 
 function wire() {
   const on = (sel, event, fn) => document.querySelectorAll(sel).forEach((el) => el.addEventListener(event, fn))
+
+  if (gameId === 'giveaways') wireGiveaways()
 
   on('[data-copy]', 'click', (e) => copy(e.currentTarget.dataset.copy, 'Overlay URL copied'))
 
@@ -1263,6 +1280,327 @@ const BONUS_TYPES = [
  * handlers defined outside wire() need it too, and a const would also be in its
  * temporal dead zone during the first draw().
  */
+
+// ─── Giveaways ──────────────────────────────────────────────────────────────
+
+/**
+ * §4's phases, as the streamer's screen.
+ *
+ * The layout changes completely between them, which is unusual for this product
+ * — every other game keeps one shape and changes what is in it. It is right
+ * here because the phases have nothing in common: three minutes of a climbing
+ * counter, then a held still frame, then a reel, then a named person and a
+ * clock. One layout covering all four would be worst at the two that are on
+ * screen longest.
+ */
+function giveaways() {
+  const phase = state.phase ?? 'idle'
+  const phases = ['Open', 'Locked', 'Draw', 'Claim', 'Complete']
+  const current =
+    { idle: 'Open', open: 'Open', locked: 'Locked', draw: 'Draw',
+      claim: 'Claim', passover: 'Claim', awarded: 'Claim', complete: 'Complete' }[phase] ?? 'Open'
+
+  if (phase === 'complete') {
+    return `
+    ${header(phases, current)}
+    ${sessionStats(state)}
+    ${winnersTable(state)}
+    ${verificationCard(state, sessionId)}`
+  }
+
+  if (phase === 'claim' || phase === 'passover' || phase === 'awarded') {
+    return `
+    ${header(phases, current)}
+    ${state.passoversExhausted ? exhaustedPanel(state) : claimHero(state)}
+    <div class="grid grid-cols-1 xl:grid-cols-12 gap-lg">
+      <div class="xl:col-span-7">${winnersTable(state)}</div>
+      <div class="xl:col-span-5 flex flex-col gap-lg">
+        ${orderPanel(state)}
+        ${prizeQueue(state)}
+      </div>
+    </div>`
+  }
+
+  if (phase === 'locked' || phase === 'draw') {
+    return `
+    ${header(phases, current)}
+    ${lockedPanel(state)}
+    ${phase === 'draw' ? reelMirror(state) : ''}
+    <div class="grid grid-cols-1 xl:grid-cols-12 gap-lg">
+      <div class="xl:col-span-7">${entryFeed(state)}</div>
+      <div class="xl:col-span-5 flex flex-col gap-lg">
+        ${oddsPanel(state)}
+        ${prizeQueue(state)}
+      </div>
+    </div>`
+  }
+
+  return `
+  ${header(phases, current)}
+  ${entryHero(state)}
+  ${rejectionStrip(state)}
+  <div class="grid grid-cols-1 xl:grid-cols-12 gap-lg">
+    <div class="xl:col-span-7">${entryFeed(state)}</div>
+    <div class="xl:col-span-5 flex flex-col gap-lg">
+      ${oddsPanel(state)}
+      ${prizeQueue(state)}
+      ${verificationCard(state, sessionId)}
+    </div>
+  </div>`
+}
+
+/**
+ * The action bar — and the one place a spec rule shows up as an *absence*.
+ *
+ * §11: "there is no re-draw action, at any privilege level, in any phase. Its
+ * absence is a feature." There is no control here that re-runs a draw, and
+ * adding one would require deleting the commitment §3 is built on.
+ */
+function giveawaysActionBar(phase) {
+  if (phase === 'idle') {
+    return `
+      <div class="text-on-surface-variant font-data-mono text-sm">
+        Ready. Opening entry commits the seed and posts its fingerprint to chat.
+      </div>
+      <button data-ga-open class="bg-primary text-on-primary px-xl py-sm rounded-lg font-bold uppercase
+        font-label-caps flex items-center gap-sm hover:brightness-110 transition-all">
+        Open entry <span class="material-symbols-outlined text-[18px]">how_to_reg</span></button>`
+  }
+
+  if (phase === 'open') {
+    /*
+     * §2 rule 3 — "there is no snap close". This starts a fifteen-second
+     * visible countdown, and the hidden grace runs after that. The button
+     * disables for the duration rather than pretending entries stopped.
+     */
+    return `
+      <div class="text-on-surface-variant font-data-mono text-sm">
+        ${(state.entryCount ?? 0).toLocaleString()} in. Closing runs a fifteen-second countdown first — entries never stop instantly.
+      </div>
+      <div class="flex items-center gap-sm">
+        <button data-ga-extend class="border border-outline-variant hover:border-primary hover:text-primary
+          text-on-surface-variant px-md py-sm rounded-lg font-bold uppercase font-label-caps transition-colors">
+          +60 seconds</button>
+        <button data-ga-close ${state.closing ? 'disabled' : ''}
+          class="bg-primary text-on-primary px-xl py-sm rounded-lg font-bold uppercase font-label-caps
+                 disabled:opacity-40 disabled:cursor-not-allowed">
+          ${state.closing ? 'Closing…' : 'Close entry'}</button>
+      </div>`
+  }
+
+  if (phase === 'locked') {
+    const prize = currentPrize(state)
+    return `
+      <div class="text-on-surface-variant font-data-mono text-sm">
+        Hold this frame for a beat — that count is what chat just spent three minutes producing.
+      </div>
+      <button data-ga-draw class="bg-primary text-on-primary px-xl py-sm rounded-lg font-bold uppercase
+        font-label-caps flex items-center gap-sm hover:brightness-110 transition-all">
+        Draw ${escapeHtml(prize?.title ?? 'the prize')}
+        <span class="material-symbols-outlined text-[18px]">casino</span></button>`
+  }
+
+  if (phase === 'draw') {
+    // UI §3 — "every control on the page disables for the duration", replaced
+    // by the one button that jumps to the settle frame.
+    return `
+      <div class="text-on-surface-variant font-data-mono text-sm">Reel running.</div>
+      <button data-ga-skip class="border border-outline-variant text-on-surface-variant px-md py-sm
+        rounded-lg font-bold uppercase font-label-caps">Skip animation</button>`
+  }
+
+  if ((phase === 'claim' || phase === 'passover') && !state.passoversExhausted) {
+    return `
+      <div class="text-on-surface-variant font-data-mono text-sm">
+        Each of these is recorded with your reason and shown on the overlay.
+      </div>
+      <div class="flex items-center gap-sm">
+        <button data-ga-claim-extend class="border border-outline-variant hover:border-primary hover:text-primary
+          text-on-surface-variant px-md py-sm rounded-lg font-bold uppercase font-label-caps transition-colors">
+          +60 seconds</button>
+        <button data-ga-award class="border border-outline-variant hover:border-gold hover:text-gold
+          text-on-surface-variant px-md py-sm rounded-lg font-bold uppercase font-label-caps transition-colors">
+          Award manually</button>
+        <button data-ga-pass class="border border-outline-variant hover:border-loss hover:text-loss
+          text-on-surface-variant px-md py-sm rounded-lg font-bold uppercase font-label-caps transition-colors">
+          Pass over now</button>
+      </div>`
+  }
+
+  if (phase === 'awarded') {
+    const remaining = (state.prizes ?? []).filter((p) => p.status === 'pending').length
+    if (remaining === 0) return ''
+    return `
+      <div class="text-on-surface-variant font-data-mono text-sm">
+        ${remaining} ${remaining === 1 ? 'prize' : 'prizes'} left. The order carries on from where it stopped.
+      </div>
+      <button data-ga-next class="bg-primary text-on-primary px-xl py-sm rounded-lg font-bold uppercase
+        font-label-caps flex items-center gap-sm hover:brightness-110 transition-all">
+        Next prize <span class="material-symbols-outlined text-[18px]">arrow_forward</span></button>`
+  }
+
+  return ''
+}
+
+/**
+ * §8.4 — "every intervention on this screen carries a required reason and
+ * appears on the overlay."
+ *
+ * A select rather than a free-text box, for the same reason the veto dialog
+ * uses one: the streamer is mid-broadcast and a required field they have to
+ * compose a sentence for is a field they will fill with a full stop. Fixed
+ * options are answerable in one click and stay legible on a public record.
+ */
+function reasonDialog({ title, body, options, confirm, tone = 'primary', onConfirm }) {
+  const dialog = $('#dialog')
+  dialog.innerHTML = `
+    <div class="bg-surface-container rounded-xl border border-outline-variant shadow-xl max-w-md w-full p-xl relative overflow-hidden">
+      <div class="absolute top-0 left-0 w-full h-1 bg-${tone}"></div>
+      <h2 class="font-display-lg-mobile text-display-lg-mobile font-bold mb-base">${escapeHtml(title)}</h2>
+      <p class="text-on-surface-variant mb-lg">${escapeHtml(body)}</p>
+
+      <label class="block font-label-caps text-label-caps text-on-surface-variant uppercase mb-xs">Reason</label>
+      <select id="ga-reason" class="input-dark w-full rounded-lg px-sm py-sm mb-lg">
+        ${options.map((o) => `<option value="${escapeHtml(o)}">${escapeHtml(o)}</option>`).join('')}
+      </select>
+
+      <p class="text-[12px] text-on-surface-variant/70 mb-lg leading-relaxed">
+        Recorded in the winners record, badged on the overlay, and shown on the public verification page.
+        Visible discretion is the point — a silent version of this button would undo more than it enables.
+      </p>
+
+      <div class="flex gap-md justify-end">
+        <button id="dlg-cancel" class="px-md py-sm rounded-lg font-bold text-on-surface-variant
+          hover:bg-surface-variant transition-colors font-label-caps uppercase">Cancel</button>
+        <button id="dlg-ok" class="bg-${tone} text-on-primary px-md py-sm rounded-lg font-bold font-label-caps uppercase">
+          ${escapeHtml(confirm)}</button>
+      </div>
+    </div>`
+
+  dialog.classList.remove('hidden')
+  dialog.classList.add('flex')
+
+  const close = () => {
+    dialog.classList.add('hidden')
+    dialog.classList.remove('flex')
+  }
+  $('#dlg-cancel').onclick = close
+  $('#dlg-ok').onclick = async () => {
+    await onConfirm($('#ga-reason').value)
+    close()
+  }
+}
+
+/** Handlers for everything the giveaway screens expose. */
+function wireGiveaways() {
+  const on = (sel, fn) => document.querySelectorAll(sel).forEach((el) => el.addEventListener('click', fn))
+
+  on('[data-ga-open]', () => act('entry.open'))
+  on('[data-ga-close]', () => act('entry.close'))
+  on('[data-ga-extend]', () => act('entry.extend', { ms: 60_000 }))
+  on('[data-ga-draw]', () => act('prize.draw'))
+  on('[data-ga-skip]', () => act('draw.skip'))
+  on('[data-ga-next]', () => act('prize.next'))
+  on('[data-ga-claim-extend]', () => act('claim.extend', { ms: 60_000 }))
+
+  on('[data-ga-award]', () => {
+    const username = state.claim?.username
+    if (!username) return
+    reasonDialog({
+      title: 'Award it by hand',
+      body: `${currentPrize(state)?.title ?? 'This prize'} goes to @${username} without them typing the command.`,
+      options: ["Replied in Discord", "Typo'd the command", 'I know them', 'Other'],
+      confirm: 'Award',
+      tone: 'gold',
+      onConfirm: (reason) => act('prize.award', { username, reason }),
+    })
+  })
+
+  on('[data-ga-award-last]', () => {
+    const last = state.passovers?.[state.passovers.length - 1]
+    if (!last) return
+    reasonDialog({
+      title: 'Award it anyway',
+      body: `@${last.username} ran out of time, but you can still give it to them.`,
+      options: ["Replied in Discord", 'I know them', 'They came back', 'Other'],
+      confirm: 'Award',
+      tone: 'gold',
+      onConfirm: (reason) => act('prize.award', { username: last.username, reason }),
+    })
+  })
+
+  on('[data-ga-pass]', () => {
+    reasonDialog({
+      title: 'Pass over now',
+      body:
+        `@${state.claim?.username ?? 'They'} loses this prize and it moves to the next name. ` +
+        'This is recorded as your decision, not as an expiry — the overlay shows the difference.',
+      options: ['They have left the stream', 'They said to pass', 'Other'],
+      confirm: 'Pass over',
+      tone: 'loss',
+      onConfirm: (reason) => act('prize.passover', { reason }),
+    })
+  })
+
+  on('[data-ga-void]', () => {
+    reasonDialog({
+      title: 'Void this prize',
+      body: 'Nobody gets it. This is announced in chat and recorded against the prize.',
+      options: ['Nobody claimed it', 'No longer available', 'Other'],
+      confirm: 'Void',
+      tone: 'loss',
+      onConfirm: (reason) => act('prize.void', { reason }),
+    })
+  })
+
+  /*
+   * §8.4's third option, and the shape is the argument: the only way to get a
+   * second draw is one that is visibly a second draw. This prize is voided here
+   * and the streamer lands on setup for a new session with a new seed.
+   */
+  on('[data-ga-fresh]', () =>
+    confirmDialog(
+      'Run a fresh giveaway for it?',
+      'This prize is voided here and you start a new session with a new seed. Everyone enters again, and it is obvious to chat that they are.',
+      async () => {
+        await act('prize.void', { reason: 'running a fresh giveaway for it' })
+        location.href = '/setup?game=giveaways'
+      },
+    ))
+
+  on('[data-ga-loosen]', (event) => {
+    const reason = event.currentTarget.dataset.gaLoosen
+    confirmDialog(
+      'Open entry up?',
+      'These viewers still have to type again — nothing is applied retroactively, and the overlay footer updates to say the gate has changed.',
+      () => act('gate.loosen', { reason }),
+    )
+  })
+
+  const verify = $('[data-ga-copy-verify]')
+  verify?.addEventListener('click', () => copy(verify.dataset.gaCopyVerify, 'Verification link copied'))
+}
+
+/**
+ * Both clocks, ticking between patches.
+ *
+ * §16 — "resync the clock from `expiresAtMs`, never from elapsed time on the
+ * client." Every tick recomputes from the absolute timestamp the server sent,
+ * so a throttled tab or a reconnect lands on the right second rather than
+ * drifting and then jumping.
+ */
+function tickGiveawayClocks() {
+  const entry = document.querySelector('[data-ga-clock]')
+  if (entry?.dataset.gaClock) {
+    entry.textContent = gaClock(Number(entry.dataset.gaClock) - Date.now())
+  }
+
+  const claim = document.querySelector('[data-ga-claim]')
+  if (claim) {
+    claim.textContent = gaClock(Math.max(0, Number(claim.dataset.gaClaim) - Date.now()))
+  }
+}
+
 function act(action, payload) {
   return attempt(() => control(sessionId, action, payload))
 }

@@ -175,6 +175,29 @@
   /* Takeover for the result reveal and the between-rounds bracket. */
   #takeover { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
               background: var(--panel); backdrop-filter: blur(20px); }
+
+  /*
+   * The name reel — Giveaways §7.
+   *
+   * A fixed row height is load-bearing rather than cosmetic: the settle
+   * position is computed as `index * ROW`, so a row that grew with a long
+   * username would land the reel between two names. The overflow mask keeps
+   * exactly three names in frame, which is what makes the last second readable.
+   */
+  #ga-reel-window { position: relative; height: 288px; overflow: hidden;
+                    -webkit-mask-image: linear-gradient(to bottom, transparent, #000 22%, #000 78%, transparent);
+                            mask-image: linear-gradient(to bottom, transparent, #000 22%, #000 78%, transparent); }
+  #ga-reel-strip  { will-change: transform, filter; }
+  .ga-reel-name   { height: 96px; display: flex; align-items: center; justify-content: center;
+                    font-family: Sora, sans-serif; font-weight: 800; letter-spacing: -.02em;
+                    font-size: 56px; color: var(--muted); }
+
+  /* The settle, and the only state change after it. Nothing moves from here. */
+  #ga-reel-window.settled .ga-reel-name { color: var(--muted); opacity: .25; }
+  #ga-reel-window.settled #ga-reel-line { opacity: 1; }
+  #ga-reel-line   { position: absolute; inset: 96px 0 96px 0; pointer-events: none; opacity: .55;
+                    border-top: 2px solid var(--primary); border-bottom: 2px solid var(--primary);
+                    background: rgba(168, 85, 247, .08); transition: opacity .25s ease; }
 </style>
 </head>
 <body>
@@ -350,7 +373,15 @@ connect({
      * A flip that re-runs after an OBS hiccup, showing chat a result they have
      * already seen, looks exactly like a re-roll.
      */
-    if (frame.t === 'snapshot') resetFlip?.()
+    if (frame.t === 'snapshot') {
+      resetFlip?.()
+      /*
+       * Giveaways §7.2 — "reconnect during the reel jumps to the settled state
+       * and never replays", for a sharper reason than the platform's usual one:
+       * a replayed name reel is indistinguishable from a redraw.
+       */
+      reelStarted = next.phase !== 'draw' ? false : true
+    }
     state = next
     render()
   },
@@ -371,6 +402,7 @@ function render() {
   if (gameId === 'slot-tournament') return renderTournament()
   if (gameId === 'slot-bingo') return renderBingo()
   if (gameId === 'team-battles') return renderBattles()
+  if (gameId === 'giveaways') return renderGiveaways()
   renderHunt()
 }
 
@@ -1412,6 +1444,457 @@ setInterval(() => {
   const ends = state.guessWindowEndsAt ?? state.votingEndsAt ?? state.joinWindowEndsAt
   node.textContent = countdown(ends) ?? '00:00'
 }, 250)
+
+// ─── Giveaways ──────────────────────────────────────────────────────────────
+
+const GIVEAWAY_TABS = [
+  ['open', 'Entry Open'],
+  ['locked', 'Entries Closed'],
+  ['draw', 'The Draw'],
+  ['claim', 'Claim'],
+  ['complete', 'Winners'],
+]
+
+/**
+ * Giveaways §13.
+ *
+ * Two rules from the spec show up here as code rather than as layout, and both
+ * are the kind that only fail in front of an audience.
+ *
+ * **The entry count is monotonic.** It counts accepted entries and never
+ * anything else — rejections and mod removals move the dashboard figure and
+ * never this one. A hero number that drops by forty in front of the whole
+ * channel invites exactly one conclusion.
+ *
+ * **The reel settles exactly once and is never replayed.** A reconnect during
+ * the draw jumps to the settled frame, per the platform's never-replay law and
+ * for a sharper reason than usual: a replayed name reel is indistinguishable
+ * from a redraw.
+ */
+function renderGiveaways() {
+  const phase = state.phase ?? 'idle'
+  renderTabs(giveawayTab(phase), GIVEAWAY_TABS)
+
+  if (phase !== 'draw') el('takeover').className = 'hidden'
+
+  if (phase === 'draw') return giveawayReel()
+  if (phase === 'claim' || phase === 'passover' || phase === 'awarded') return giveawayClaim()
+  if (phase === 'complete') return giveawayBoard()
+  giveawayEntry()
+}
+
+const giveawayTab = (phase) =>
+  ({ idle: 'open', open: 'open', locked: 'locked', draw: 'draw',
+     claim: 'claim', passover: 'claim', awarded: 'claim', complete: 'complete' })[phase] ?? 'open'
+
+/**
+ * §13 — entry open, and the locked beat that follows it.
+ *
+ * "The entry count is the hero and it is enormous. The command sits beneath it
+ * at the largest size the layout allows, because a viewer arriving mid-window
+ * needs to know what to type before they need to know anything else. The
+ * countdown is third."
+ *
+ * That ordering is the whole design of this state and it is deliberately not
+ * the ordering intuition suggests — the clock feels like the urgent thing, and
+ * it is third.
+ */
+function giveawayEntry() {
+  const locked = state.phase === 'locked'
+  const count = state.entryCount ?? 0
+  const odds = state.oddsOneIn
+  const prize = state.prizes?.[state.currentPrizeIndex ?? 0]
+
+  el('left').innerHTML = `
+    <div class="card enter" style="border-top-color:var(--primary);margin-bottom:16px">
+      <div class="bloom" style="background:var(--primary)"></div>
+      <div style="position:relative">
+        <div class="label" style="margin-bottom:10px">${escapeHtml(prize?.title ?? 'Giveaway')}</div>
+        <div class="display mono" style="font-size:132px;line-height:.95;color:var(--text)">
+          ${count.toLocaleString()}</div>
+        <div class="label" style="margin-top:6px;font-size:22px;color:var(--muted)">entered</div>
+      </div>
+    </div>`
+
+  el('right').innerHTML = locked
+    ? /*
+       * §4 — the held beat. "Do not skip it; the number is the payoff for the
+       * window and the audience has been watching it climb." The clock leaves
+       * and nothing replaces it, which is what makes the frame still.
+       */
+      `<div class="panel" style="padding:34px 30px;text-align:center">
+         <div class="label" style="font-size:26px;color:var(--loss);margin-bottom:10px">Entries closed</div>
+         <div class="mono" style="font-size:24px;color:var(--muted);line-height:1.5">
+           Drawing from ${count.toLocaleString()} ${count === 1 ? 'entry' : 'entries'}
+         </div>
+       </div>`
+    : `<div class="panel" style="padding:34px 30px;text-align:center">
+         <div class="label" style="margin-bottom:14px">Type this in chat</div>
+         <div class="display" style="font-size:72px;line-height:1;color:var(--primary)">
+           !${escapeHtml(state.keyword ?? 'drop')}</div>
+         <div class="mono" id="ga-entry-clock" data-closes="${state.entryClosesAtMs ?? ''}"
+              style="font-size:44px;margin-top:26px;color:var(--text)">
+           ${state.entryClosesAtMs ? countdown(state.entryClosesAtMs) : '—'}</div>
+         <div class="label" style="margin-top:6px;color:var(--muted)">remaining</div>
+       </div>`
+
+  /*
+   * §13 — the joining feed. "It is doing more work than it looks like it is:
+   * the feed is the proof that entries are landing, and without it a viewer who
+   * typed has no confirmation of anything." Nothing is ever acked to them in
+   * chat, so this scroll is the entire receipt.
+   */
+  const recent = state.recentEntrants ?? []
+  el('bottom').innerHTML = `
+    <div class="panel" style="padding:16px 26px;display:flex;align-items:center;gap:26px">
+      <div class="mono truncate" style="flex:1;font-size:24px;color:var(--text);opacity:${locked ? '.45' : '1'}">
+        ${recent.length === 0
+          ? '<span style="color:var(--muted)">Waiting for the first entry…</span>'
+          : recent.map((e) => `@${escapeHtml(e.username)}`).join('  ·  ')}
+      </div>
+      <div class="label" style="flex-shrink:0;color:var(--muted);font-size:19px">
+        ${escapeHtml(state.gateLine ?? '')}${odds ? ` · you: 1 in ${odds.toLocaleString()}` : ''}
+      </div>
+    </div>`
+}
+
+/**
+ * §7 — the reel.
+ *
+ * A vertical reel of real usernames, accelerating, blurring, decelerating, and
+ * settling on one. Full-frame takeover: the one moment the entry count is
+ * allowed to leave the screen.
+ *
+ * **Team Battles' scripted fake-out is explicitly not reused, and the contrast
+ * is the design point.** There, the reel settles on the losing colour and
+ * snaps, and the trick works because a coin has two faces and neither belongs
+ * to anyone. Here the faces are people, and a reel that settles on somebody,
+ * holds long enough for them to believe it, then moves has shown a viewer they
+ * won a prize they did not win. There is no framing that makes that acceptable.
+ *
+ * So: one settle, and after it nothing moves. Every bit of tension this needs
+ * lives in the deceleration, where names pass slowly enough to read.
+ */
+let reelStarted = false
+
+function giveawayReel() {
+  const names = state.reelNames ?? []
+  const prize = state.prizes?.[state.currentPrizeIndex ?? 0]
+
+  el('left').innerHTML = ''
+  el('right').innerHTML = ''
+  el('bottom').innerHTML = ''
+  el('takeover').className = ''
+
+  if (reelStarted) return
+
+  reelStarted = true
+  const winner = names[names.length - 1] ?? ''
+
+  // Enough repetitions that the strip never runs out under acceleration, and
+  // the winner sits at a known index so the settle lands on a real name rather
+  // than on a copy of one.
+  const strip = []
+  for (let i = 0; i < 6; i++) strip.push(...names.slice(0, Math.max(1, names.length - 1)))
+  strip.push(winner)
+
+  el('takeover').innerHTML = `
+    <div style="text-align:center;width:100%">
+      <div class="label" style="font-size:26px;color:var(--primary);margin-bottom:8px">Drawing</div>
+      <div class="display" style="font-size:40px;color:var(--gold);margin-bottom:34px">
+        ${escapeHtml(prize?.title ?? 'the prize')}</div>
+      <div id="ga-reel-window">
+        <div id="ga-reel-strip">
+          ${strip.map((n) => `<div class="ga-reel-name">@${escapeHtml(n)}</div>`).join('')}
+        </div>
+        <div id="ga-reel-line"></div>
+      </div>
+    </div>`
+
+  runReel(strip.length - 1)
+}
+
+/**
+ * The physics — §7.2's timeline, as one rAF loop.
+ *
+ *   0.0s  the reel starts, names blurring upward
+ *   3.0s  deceleration, names become readable one at a time
+ *   4.3s  settle — the name lands and locks
+ *
+ * Eased with a single cubic ease-out over the whole distance rather than in
+ * scripted stages, because a stage boundary is visible as a hitch at 60fps and
+ * the one thing this animation cannot afford is looking like it was steered.
+ */
+function runReel(winnerIndex) {
+  const strip = el('ga-reel-strip')
+  const window_ = el('ga-reel-window')
+  if (!strip || !window_) return
+
+  const ROW = 96
+  const distance = winnerIndex * ROW - window_.clientHeight / 2 + ROW / 2
+  const duration = state.reelMs ?? 4500
+  const start = performance.now()
+
+  const step = (now) => {
+    const t = Math.min(1, (now - start) / duration)
+    // Quintic ease-out: fast enough early to blur, slow enough late to read.
+    const eased = 1 - Math.pow(1 - t, 5)
+    strip.style.transform = `translateY(${-(distance * eased)}px)`
+
+    // The blur tracks velocity rather than the clock, so slowing down and
+    // becoming readable are the same event instead of two that nearly coincide.
+    const velocity = Math.pow(1 - t, 4)
+    strip.style.filter = velocity > 0.05 ? `blur(${Math.min(14, velocity * 26)}px)` : 'none'
+
+    if (t < 1) {
+      requestAnimationFrame(step)
+      return
+    }
+
+    // Settled. Nothing moves after this.
+    strip.style.filter = 'none'
+    window_.classList.add('settled')
+  }
+
+  requestAnimationFrame(step)
+}
+
+/**
+ * §8 — the claim window, and UI §1: "the main event, not the reveal."
+ *
+ * On screen for up to three minutes against the reveal's five seconds, so it
+ * gets the full frame rather than a badge on a winner card. The clock is the
+ * second-largest element and it counts down toward something bad — the one
+ * place in this product where a red countdown is correct.
+ */
+function giveawayClaim() {
+  const claim = state.claim
+  const prize = state.prizes?.[state.currentPrizeIndex ?? 0]
+  const window_ = state.claimWindowMs ?? 180_000
+
+  if (!claim) return giveawayBoard()
+
+  const remaining = Math.max(0, claim.expiresAtMs - Date.now())
+  const settled = state.awards?.find((a) => a.prizeIndex === claim.prizeIndex)
+
+  el('left').innerHTML = `
+    <div class="card enter" style="border-top-color:${settled ? 'var(--win)' : 'var(--gold)'};margin-bottom:16px">
+      <div class="bloom" style="background:${settled ? 'var(--win)' : 'var(--gold)'}"></div>
+      <div style="position:relative">
+        <div class="label" style="margin-bottom:10px;color:${settled ? 'var(--win)' : 'var(--muted)'}">
+          ${settled ? (settled.method === 'manual' ? 'Awarded by the streamer' : 'Claimed') : 'Winner'}</div>
+        <div class="display truncate" style="font-size:64px;line-height:1.05;color:var(--text)">
+          @${escapeHtml(claim.username)}</div>
+        <div class="display" style="font-size:34px;margin-top:14px;color:var(--gold)">
+          ${escapeHtml(prize?.title ?? '')}</div>
+      </div>
+    </div>
+    ${passoverStrip()}`
+
+  el('right').innerHTML = settled
+    ? `<div class="panel" style="padding:40px 30px;text-align:center">
+         <div style="color:var(--win);display:flex;justify-content:center;margin-bottom:14px">${ICON.check}</div>
+         <div class="display" style="font-size:40px;color:var(--win)">
+           ${settled.method === 'manual' ? 'Awarded' : 'Claimed'}</div>
+       </div>`
+    : `<div class="panel" style="padding:34px 30px;text-align:center">
+         <div class="label" style="margin-bottom:12px">Type <span style="color:var(--primary)">!claim</span></div>
+         <div class="mono" id="ga-claim-clock"
+              data-expires="${claim.expiresAtMs}" data-window="${window_}"
+              style="font-size:104px;line-height:1;color:${claimColour(remaining, window_)}">
+           ${countdown(claim.expiresAtMs)}</div>
+         <div class="label" style="margin-top:8px;color:var(--muted)">to claim it</div>
+       </div>`
+
+  el('bottom').innerHTML = winnersStrip()
+}
+
+/** UI's two-clocks note: gold, then amber past halfway, then red under 30s. */
+function claimColour(remaining, window_) {
+  if (remaining <= 30_000) return 'var(--loss)'
+  if (remaining <= window_ / 2) return '#FF9F3D'
+  return 'var(--gold)'
+}
+
+/**
+ * §8.3 — the passed-over names, struck through, labelled, still on screen.
+ *
+ * "Openly, every time. A silent substitution is the single most suspicious
+ * thing this product could do, and the whole construction in §3 exists so that
+ * this moment can be shown rather than hidden."
+ */
+function passoverStrip() {
+  const passed = (state.passovers ?? []).filter((p) => p.prizeIndex === state.currentPrizeIndex)
+  if (passed.length === 0) return ''
+
+  return `
+    <div class="panel" style="padding:18px 24px">
+      ${passed
+        .map(
+          (p) => `
+        <div class="row" style="padding:6px 0;font-size:24px">
+          <span class="grow truncate mono" style="color:var(--muted);text-decoration:line-through">
+            @${escapeHtml(p.username)}</span>
+          <span class="label" style="color:var(--loss);flex-shrink:0">
+            ${p.reason === 'expired' ? "didn't claim in time" : 'passed over'}</span>
+        </div>`,
+        )
+        .join('')}
+    </div>`
+}
+
+/** §13 — the winners strip at the edge, with strike-throughs that persist. */
+function winnersStrip() {
+  const awards = state.awards ?? []
+  const prizes = state.prizes ?? []
+  if (awards.length === 0 && prizes.length <= 1) return ''
+
+  return `
+    <div class="panel" style="padding:16px 26px;display:flex;align-items:center;gap:22px;flex-wrap:wrap">
+      ${prizes
+        .map((p) => {
+          const award = awards.find((a) => a.prizeIndex === p.index)
+          const colour =
+            award?.method === 'voided'
+              ? 'var(--loss)'
+              : award
+                ? 'var(--win)'
+                : p.index === state.currentPrizeIndex
+                  ? 'var(--gold)'
+                  : 'var(--muted)'
+          return `
+          <span class="mono" style="font-size:21px;color:${colour}">
+            ${escapeHtml(p.title)}${award && award.username ? ` · @${escapeHtml(award.username)}` : ''}
+            ${award?.method === 'manual' ? ' <span class="label" style="color:var(--gold)">awarded</span>' : ''}
+          </span>`
+        })
+        .join('<span style="color:var(--border)">|</span>')}
+    </div>`
+}
+
+/**
+ * §13's resting state — the winners board.
+ *
+ * "This is what the stream sits on while the streamer talks, so it is a real
+ * design surface and not a placeholder." Every prize with its winner, the
+ * claim status, and the passed-over names still visible. The fingerprint and
+ * the verification URL live in its footer.
+ */
+function giveawayBoard() {
+  const prizes = state.prizes ?? []
+  const awards = state.awards ?? []
+  const passovers = state.passovers ?? []
+
+  if (prizes.length === 0 && (state.entryCount ?? 0) === 0) {
+    // §16 — a giveaway nobody entered is information. Say it plainly.
+    el('left').innerHTML = `
+      <div class="panel" style="padding:40px 30px;text-align:center">
+        <div class="display" style="font-size:38px;color:var(--muted)">Nobody entered</div>
+      </div>`
+    el('right').innerHTML = ''
+    el('bottom').innerHTML = ''
+    return
+  }
+
+  el('left').innerHTML = `
+    <div class="panel" style="padding:26px 28px">
+      <div class="label" style="margin-bottom:18px">Winners</div>
+      ${prizes
+        .map((p) => {
+          const award = awards.find((a) => a.prizeIndex === p.index)
+          const passed = passovers.filter((x) => x.prizeIndex === p.index)
+          return `
+          <div style="padding:14px 0;border-bottom:1px solid var(--border)">
+            <div class="row" style="font-size:26px">
+              <span class="grow truncate" style="color:var(--gold)">${escapeHtml(p.title)}</span>
+              <span class="mono truncate" style="flex-shrink:0;color:${
+                award?.method === 'voided' ? 'var(--loss)' : 'var(--text)'
+              }">
+                ${award && award.username ? `@${escapeHtml(award.username)}` : 'unclaimed'}</span>
+            </div>
+            ${
+              award?.method === 'manual'
+                ? `<div class="label" style="color:var(--gold);margin-top:4px">awarded by the streamer</div>`
+                : ''
+            }
+            ${
+              passed.length > 0
+                ? `<div class="mono" style="font-size:19px;color:var(--muted);margin-top:6px;text-decoration:line-through">
+                     ${passed.map((x) => `@${escapeHtml(x.username)}`).join(', ')}</div>`
+                : ''
+            }
+          </div>`
+        })
+        .join('')}
+    </div>`
+
+  const rate = state.claimRate
+  el('right').innerHTML = `
+    <div class="panel" style="padding:30px 28px">
+      <div class="label" style="margin-bottom:12px">Entries</div>
+      <div class="display mono" style="font-size:64px;color:var(--text)">
+        ${(state.entryCount ?? 0).toLocaleString()}</div>
+      ${
+        rate === null || rate === undefined
+          ? ''
+          : `<div class="label" style="margin-top:22px">Claim rate</div>
+             <div class="display mono" style="font-size:44px;color:${rate < 0.5 ? 'var(--loss)' : 'var(--win)'}">
+               ${Math.round(rate * 100)}%</div>`
+      }
+    </div>`
+
+  /*
+   * §3 — the commitment, closed. The fingerprint was published before anyone
+   * entered; the seed is published here. Anyone can hash the one and check it
+   * against the other, which is the whole of the fairness argument in one line
+   * of overlay-legal text.
+   */
+  el('bottom').innerHTML = `
+    <div class="panel" style="padding:16px 26px;display:flex;align-items:center;justify-content:space-between;gap:26px">
+      <span class="mono truncate" style="font-size:20px;color:var(--muted)">
+        Seed committed before the first entry: ${escapeHtml(state.seedHash ?? '—')}
+        ${state.seed ? ` · published: ${escapeHtml(state.seed)}` : ''}
+      </span>
+      <span class="label" style="flex-shrink:0;color:var(--muted)">No re-draws, ever</span>
+    </div>`
+}
+
+/**
+ * Both clocks, resynced from their absolute timestamps every tick.
+ *
+ * §16 — "resync the clock from `expiresAtMs`, never from elapsed time on the
+ * client. A clock that drifts a few seconds across an OBS reconnect and then
+ * jumps is worse than a clock that pauses." Whole seconds only: a 1920×1080
+ * source re-encoded at low bitrate turns a fast-updating digit into mush.
+ */
+function tickGiveawayClocks() {
+  const entry = el('ga-entry-clock')
+  if (entry?.dataset.closes) {
+    const closesAt = Number(entry.dataset.closes)
+    entry.textContent = countdown(closesAt) ?? '0:00'
+    /*
+     * §2 and the UI's two-clocks note — the entry clock counts down toward
+     * something good, so it never turns red. Gold under thirty seconds is as
+     * urgent as it is allowed to get: a red clock at ninety seconds reads as
+     * "too late" to somebody who just arrived, and the whole point of this
+     * phase is getting people to type.
+     */
+    entry.style.color = closesAt - Date.now() <= 30_000 ? 'var(--gold)' : 'var(--text)'
+  }
+
+  const claim = el('ga-claim-clock')
+  if (claim) {
+    const expiresAt = Number(claim.dataset.expires)
+    const remaining = Math.max(0, expiresAt - Date.now())
+    claim.textContent = countdown(expiresAt) ?? '0:00'
+    claim.style.color = claimColour(remaining, Number(claim.dataset.window))
+  }
+}
+
+/* Both giveaway clocks tick locally; every tick recomputes from an absolute
+   timestamp, so a reconnect lands on the right second (§16). */
+setInterval(() => { if (gameId === 'giveaways') tickGiveawayClocks() }, 500)
+
 </script>
 </body>
 </html>

@@ -29,7 +29,26 @@ export async function registerSettingsRoutes(app: FastifyInstance, ctx: WebConte
     const channel = await ctx.repos.channels.byOwner(user.id)
     const scopes = await ctx.tokens.scopes(user.id)
 
-    const active = channel ? await ctx.repos.sessions.activeForChannel(channel.id) : null
+    /*
+     * A channel can hold two sessions now — one `exclusive` game plus one
+     * `companion` giveaway running inside it — so the header has to be able to
+     * show both. `activeSession` keeps its old meaning (the exclusive game, the
+     * thing the stream is *about*) and every caller that only asks "is anything
+     * running?" is unaffected; `activeSessions` is the list.
+     */
+    const running = channel
+      ? (await ctx.repos.sessions.allActive()).filter((s) => s.channelId === channel.id)
+      : []
+
+    const summarise = (s: (typeof running)[number]) => ({
+      id: s.id,
+      gameId: s.gameId,
+      phase: s.phase,
+      startedAt: s.startedAt?.toISOString() ?? null,
+      slot: ctx.registry.get(s.gameId)?.concurrency ?? 'exclusive',
+    })
+
+    const sessions = running.map(summarise)
 
     return {
       user: {
@@ -44,14 +63,8 @@ export async function registerSettingsRoutes(app: FastifyInstance, ctx: WebConte
       isAdmin: user.isAdmin,
       kickConnected: scopes.length > 0,
       scopes,
-      activeSession: active
-        ? {
-            id: active.id,
-            gameId: active.gameId,
-            phase: active.phase,
-            startedAt: active.startedAt?.toISOString() ?? null,
-          }
-        : null,
+      activeSession: sessions.find((s) => s.slot === 'exclusive') ?? sessions[0] ?? null,
+      activeSessions: sessions,
     }
   })
 

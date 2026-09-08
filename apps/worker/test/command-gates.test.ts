@@ -16,7 +16,13 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { z } from 'zod'
 import { buildRegistry } from '../../../packages/platform/src/registry.ts'
-import { GATED_COMMANDS, gatesFor } from '../src/command-gates.ts'
+import {
+  GATED_COMMANDS,
+  KEYWORD_FIELDS,
+  SELF_ENFORCED_GATES,
+  gatesFor,
+  keywordsFor,
+} from '../src/command-gates.ts'
 
 const games = buildRegistry().list()
 
@@ -29,12 +35,16 @@ function gateKeys(schema: unknown): string[] {
   return Object.keys(inner.shape as Record<string, unknown>).filter((k) => k.endsWith('Gate'))
 }
 
-test('every gate a game offers is mapped to a command', () => {
+test('every gate a game offers is mapped to a command, or exempted on the record', () => {
   const unmapped: string[] = []
 
   for (const game of games) {
     for (const key of gateKeys(game.configSchema)) {
-      if (!GATED_COMMANDS[key]) unmapped.push(`${game.id}: ${key}`)
+      if (GATED_COMMANDS[key]) continue
+      // An exemption is allowed, but only a written one. Silence is the
+      // failure mode this whole file exists to catch.
+      if (SELF_ENFORCED_GATES[`${game.id}.${key}`]) continue
+      unmapped.push(`${game.id}: ${key}`)
     }
   }
 
@@ -43,6 +53,57 @@ test('every gate a game offers is mapped to a command', () => {
     [],
     `these gates are on a setup screen but restrict nothing:\n  ${unmapped.join('\n  ')}`,
   )
+})
+
+test('an exempted gate names a real field on a real game', () => {
+  // Otherwise the exemption outlives the field it excused and starts excusing
+  // the next thing that happens to be called entryGate.
+  const dangling = Object.keys(SELF_ENFORCED_GATES).filter((entry) => {
+    const [gameId, key] = entry.split('.')
+    const game = games.find((g) => g.id === gameId)
+    return !game || !gateKeys(game.configSchema).includes(key!)
+  })
+
+  assert.deepEqual(dangling, [], `exemptions for gates that no longer exist: ${dangling.join(', ')}`)
+})
+
+test('every keyword field a game offers renames a command that game has', () => {
+  // Same failure shape as the gates, one field over: the streamer sets !drop,
+  // the overlay says !drop, and the parser is still listening for !enter.
+  const broken: string[] = []
+
+  for (const [gameId, fields] of Object.entries(KEYWORD_FIELDS)) {
+    const game = games.find((g) => g.id === gameId)
+    if (!game) {
+      broken.push(`${gameId}: no such game`)
+      continue
+    }
+    for (const [field, command] of Object.entries(fields)) {
+      const inner =
+        game.configSchema instanceof z.ZodEffects
+          ? (game.configSchema.innerType() as unknown)
+          : (game.configSchema as unknown)
+      const shape = inner instanceof z.ZodObject ? (inner.shape as Record<string, unknown>) : {}
+      if (!(field in shape)) broken.push(`${gameId}: no config field '${field}'`)
+      if (!game.commands.some((c) => c.id === command)) {
+        broken.push(`${gameId}: no command '${command}'`)
+      }
+    }
+  }
+
+  assert.deepEqual(broken, [], broken.join('\n  '))
+})
+
+test('a themed keyword reaches the parser, with or without the prefix', () => {
+  assert.deepEqual(keywordsFor('giveaways', { keyword: 'drop' }), { enter: ['drop'] })
+  // A streamer who types the ! anyway must not end up with a '!!drop' command
+  // nobody in chat can reach.
+  assert.deepEqual(keywordsFor('giveaways', { keyword: '!gates' }), { enter: ['gates'] })
+  // Unset means the game's own default, not an empty keyword that matches
+  // every bare '!'.
+  assert.deepEqual(keywordsFor('giveaways', {}), {})
+  assert.deepEqual(keywordsFor('giveaways', { keyword: '  ' }), {})
+  assert.deepEqual(keywordsFor('bonus-hunt', { keyword: 'drop' }), {})
 })
 
 test('every mapped gate names a command some game actually has', () => {

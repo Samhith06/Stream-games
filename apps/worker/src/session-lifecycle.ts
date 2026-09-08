@@ -7,7 +7,7 @@
  * channels."
  */
 
-import { gatesFor } from './command-gates.js'
+import { gatesFor, keywordsFor } from './command-gates.js'
 import { DEFAULT_CHAT_POLICY } from '@streamarena/shared'
 import type { SessionMeta } from '@streamarena/platform'
 import type { WorkerContext } from './context.js'
@@ -46,9 +46,21 @@ export async function startSession(ctx: WorkerContext, sessionId: string): Promi
     startedAt: session.startedAt?.getTime() ?? Date.now(),
     config: session.config,
     chatPolicy: { ...DEFAULT_CHAT_POLICY, ...(config?.chatPolicy ?? {}), ...(session.chatPolicy ?? {}) },
-    commandOverrides: config?.commands ?? {},
+    /*
+     * Channel overrides first, then anything the session's own config implies.
+     * Giveaways' `keyword` is the second kind: it is a game setting on the
+     * setup form rather than a keyword override in the channel's command
+     * settings, and without this the streamer would set `!drop`, the overlay
+     * and every chat template would say `!drop`, and the parser would still be
+     * listening for `!enter`.
+     */
+    commandOverrides: {
+      ...(config?.commands ?? {}),
+      ...keywordsFor(session.gameId, session.config as Record<string, unknown>),
+    },
     commandSettings: {},
     accepting: true,
+    concurrency: game.concurrency ?? 'exclusive',
   }
 
   // Per-game config can tighten a command's gate without the game knowing —
@@ -125,13 +137,32 @@ export async function endSession(
 
   await ctx.repos.sessions.end(sessionId, reason === 'complete' ? 'ended' : 'abandoned')
 
-  // §6.3 — the subscription must go, whether the session finished cleanly or
-  // was abandoned. A standing subscription on an idle channel burns quota all
-  // day for nothing.
+  /*
+   * §6.3 — the subscription must go, whether the session finished cleanly or
+   * was abandoned. A standing subscription on an idle channel burns quota all
+   * day for nothing.
+   *
+   * But the subscription is per *channel*, not per session, and a channel can
+   * now hold two: a giveaway ending must not tear the chat feed out from under
+   * the bonus hunt it was running inside. So it goes only when this was the
+   * last session standing — which, for every game before Giveaways, is still
+   * every time.
+   */
   if (channel) {
-    await ctx.subscriptions
-      .unsubscribeForChannel({ channelId: channel.id, ownerUserId: channel.ownerUserId })
-      .catch((err) => ctx.log.error({ sessionId, err: String(err) }, 'unsubscribe failed'))
+    const stillRunning = (await ctx.repos.sessions.allActive()).filter(
+      (s) => s.channelId === channel.id && s.id !== sessionId,
+    )
+
+    if (stillRunning.length === 0) {
+      await ctx.subscriptions
+        .unsubscribeForChannel({ channelId: channel.id, ownerUserId: channel.ownerUserId })
+        .catch((err) => ctx.log.error({ sessionId, err: String(err) }, 'unsubscribe failed'))
+    } else {
+      ctx.log.info(
+        { sessionId, stillRunning: stillRunning.map((s) => s.gameId) },
+        'keeping kick subscriptions — another session is still running on this channel',
+      )
+    }
   }
 
   if (meta) await ctx.cache.clear(meta)

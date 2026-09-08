@@ -13,6 +13,7 @@ import { registerSettingsRoutes } from './routes/settings.js'
 import { registerAdminRoutes } from './routes/admin.js'
 import { registerWebSocketRoutes } from './routes/ws.js'
 import { registerDetailRoutes } from './routes/detail.js'
+import { registerVerifyRoutes } from './routes/verify.js'
 import { registerPageRoutes } from './routes/pages.js'
 import { ForbiddenError, NotFoundError, UnauthorizedError } from './plugins/session.js'
 import { corsOrigin } from './lib/origins.js'
@@ -126,6 +127,7 @@ export async function buildServer(ctx: WebContext): Promise<FastifyInstance> {
   await registerAuthRoutes(app, ctx)
   await registerSessionRoutes(app, ctx)
   await registerDetailRoutes(app, ctx)
+  await registerVerifyRoutes(app, ctx)
   await registerCatalogRoutes(app, ctx)
   await registerSettingsRoutes(app, ctx)
   await registerAdminRoutes(app, ctx)

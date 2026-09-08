@@ -32,15 +32,40 @@ export interface SessionMeta {
   /** Per-command enable/gate overrides from game_configs. */
   commandSettings: Record<string, { enabled?: boolean; gate?: string }>
   accepting: boolean
+  /**
+   * Which of the channel's two slots this session occupies — see
+   * `GameModule.concurrency`. Carried on the meta so the router can resolve a
+   * keyword collision without looking the game module up first.
+   */
+  concurrency: 'exclusive' | 'companion'
+}
+
+/** Both of a channel's session slots, as the router's step 3 reads them. */
+export interface ChannelSessions {
+  exclusive: string | null
+  companion: string | null
 }
 
 export class SessionCache {
   constructor(private readonly redis: Redis) {}
 
   /**
-   * Step 3's actual lookup. Returns null for the overwhelming majority of
-   * webhook deliveries, which is exactly the point.
+   * Step 3's actual lookup, and still one round trip.
+   *
+   * Both slots come back together because a chat line has to be offered to both
+   * before it can be dropped, and two GETs would have doubled the cost of the
+   * 95% of deliveries that are ordinary conversation. The common answer is
+   * `{ exclusive: null, companion: null }` and it costs one MGET.
    */
+  async sessionsForChannel(broadcasterUserId: string): Promise<ChannelSessions> {
+    const [exclusive, companion] = await this.redis.mget(
+      KEY.channelSession(broadcasterUserId),
+      KEY.channelCompanion(broadcasterUserId),
+    )
+    return { exclusive: exclusive ?? null, companion: companion ?? null }
+  }
+
+  /** The exclusive slot alone. Kept for callers that only ask "is one running?" */
   async sessionIdForChannel(broadcasterUserId: string): Promise<string | null> {
     return this.redis.get(KEY.channelSession(broadcasterUserId))
   }
@@ -51,23 +76,39 @@ export class SessionCache {
   }
 
   async putMeta(meta: SessionMeta): Promise<void> {
+    const pointer =
+      meta.concurrency === 'companion'
+        ? KEY.channelCompanion(meta.broadcasterUserId)
+        : KEY.channelSession(meta.broadcasterUserId)
+
     await this.redis
       .multi()
       .set(KEY.sessionMeta(meta.sessionId), JSON.stringify(meta), 'EX', SESSION_TTL_SECONDS)
-      .set(
-        KEY.channelSession(meta.broadcasterUserId),
-        meta.sessionId,
-        'EX',
-        SESSION_TTL_SECONDS,
-      )
+      .set(pointer, meta.sessionId, 'EX', SESSION_TTL_SECONDS)
       .exec()
   }
 
-  /** Called on session end. The channel pointer goes first — it gates ingest. */
-  async clear(meta: Pick<SessionMeta, 'sessionId' | 'broadcasterUserId'>): Promise<void> {
-    await this.redis
-      .multi()
-      .del(KEY.channelSession(meta.broadcasterUserId))
+  /**
+   * Called on session end. The channel pointer goes first — it gates ingest.
+   *
+   * Only this session's own pointer is cleared, and it is cleared by a
+   * compare-and-delete rather than a plain DEL: a companion giveaway ending
+   * must not take the bonus hunt it was running inside down with it, and a
+   * stale pointer from a session that already ended must not delete the one
+   * that replaced it.
+   */
+  async clear(
+    meta: Pick<SessionMeta, 'sessionId' | 'broadcasterUserId' | 'concurrency'>,
+  ): Promise<void> {
+    const pointer =
+      meta.concurrency === 'companion'
+        ? KEY.channelCompanion(meta.broadcasterUserId)
+        : KEY.channelSession(meta.broadcasterUserId)
+
+    const current = await this.redis.get(pointer)
+    const multi = this.redis.multi()
+    if (current === meta.sessionId) multi.del(pointer)
+    await multi
       .del(KEY.sessionMeta(meta.sessionId))
       .del(KEY.sessionState(meta.sessionId))
       .del(KEY.sessionSeq(meta.sessionId))

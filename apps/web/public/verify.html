@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html class="dark" lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Verify a giveaway · StreamArena</title>
+<link href="/tailwind.css" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&family=Sora:wght@600;700;800&display=swap" rel="stylesheet"/>
+<style>
+  .bg-grid { background-size: 40px 40px;
+    background-image: linear-gradient(to right, rgba(255,255,255,.03) 1px, transparent 1px),
+                      linear-gradient(to bottom, rgba(255,255,255,.03) 1px, transparent 1px); }
+
+  /*
+   * The entry list is the one part of this page that can run to hundreds of
+   * rows, and scrolling it inside its own box keeps the argument above it —
+   * hash, seed, algorithm — on screen while somebody checks a name against it.
+   */
+  .entry-scroll { max-height: 26rem; overflow-y: auto; }
+  .entry-scroll::-webkit-scrollbar { width: 8px; }
+  .entry-scroll::-webkit-scrollbar-thumb { background: rgb(var(--outline-variant)); border-radius: 4px; }
+</style>
+</head>
+<!--
+  The verification page — Giveaways §3.
+
+  "A permanent, linkable page per completed giveaway showing the hash, the seed,
+  the ordered entry list, and the resulting order, with the draw function's
+  algorithm stated in plain terms next to it. This costs a template and it turns
+  'prove it' into a URL."
+
+  Three decisions shape everything below.
+
+  **It is public and unauthenticated.** A page only the streamer can open proves
+  nothing to the chat accusing them, so there is no shell, no session, and no
+  sign-in. It also means this page can never assume a signed-in user's palette
+  or nav exists.
+
+  **It leads with the argument, not the data.** The two halves of the
+  commitment — a hash published before anyone entered, a seed published after —
+  are the whole proof, and they sit above the fold. The entry list is evidence
+  for that argument and comes after it.
+
+  **It states the algorithm rather than linking to it.** A reader who has to go
+  and find the source to check the arithmetic will not check the arithmetic.
+-->
+<body class="bg-background text-on-surface min-h-screen font-body-md antialiased relative">
+<div class="absolute inset-0 bg-grid pointer-events-none"></div>
+
+<main class="relative max-w-4xl mx-auto px-gutter py-xl flex flex-col gap-lg">
+
+  <header class="flex flex-col gap-sm">
+    <a href="/" class="font-display-lg text-2xl tracking-tighter w-max">
+      <span class="text-on-surface">STREAM</span><span class="text-primary">ARENA</span>
+    </a>
+    <h1 id="title" class="font-display-lg text-display-lg tracking-tight">Verifying this giveaway…</h1>
+    <p id="subtitle" class="text-on-surface-variant"></p>
+  </header>
+
+  <div id="root" class="flex flex-col gap-lg"></div>
+
+  <footer class="text-[13px] text-on-surface-variant/60 leading-relaxed border-t border-outline-variant pt-md">
+    StreamArena records who won. It does not hold, generate, store or send anything a prize consists of —
+    settlement happens between the streamer and the winner.
+  </footer>
+</main>
+
+<script type="module">
+import { escapeHtml } from '/app.js'
+
+const sessionId = location.pathname.split('/').pop()
+const root = document.getElementById('root')
+const title = document.getElementById('title')
+const subtitle = document.getElementById('subtitle')
+
+/*
+ * Deliberately not `api()` from app.js: that helper redirects to /login on a
+ * 401, which is exactly wrong here. This page has no session and is not
+ * supposed to have one.
+ */
+const res = await fetch(`/api/verify/${encodeURIComponent(sessionId)}`)
+const body = await res.json().catch(() => ({}))
+
+if (!res.ok) {
+  title.textContent = 'Nothing to verify here'
+  subtitle.textContent = body?.error?.message ?? 'That giveaway could not be found.'
+  root.innerHTML = body?.error?.details?.seed
+    ? panel('The seed, at least', `
+        <p class="text-on-surface-variant mb-md">
+          The session cannot be replayed by the current version of the game, so the order and the entry
+          list are not available. The seed it was drawn with is published anyway.
+        </p>
+        ${mono(body.error.details.seed, 'text-gold')}`)
+    : ''
+} else {
+  render(body)
+}
+
+function render(v) {
+  title.textContent = v.abandoned ? 'This giveaway was stopped early' : 'This giveaway checks out'
+  subtitle.innerHTML = v.abandoned
+    ? /*
+       * §3 — "a streamer who opens a giveaway, sees a name they dislike, and
+       * abandons the session leaves a public row in history saying exactly
+       * that, with the seed published anyway." This is that row, on the page
+       * the streamer shares to prove the session was fair. It does not get to
+       * be a footnote.
+       */
+      `The streamer ended it before it finished, so no winners were recorded. The seed is published below regardless — that is the rule, and it is why stopping a giveaway is never silent.`
+    : `${(v.entryCount ?? 0).toLocaleString()} ${v.entryCount === 1 ? 'person' : 'people'} entered
+       ${v.channel ? `on <span class="text-on-surface">${escapeHtml(v.channel)}</span>` : ''}
+       ${v.endedAt ? `· ${new Date(v.endedAt).toLocaleString()}` : ''}`
+
+  root.innerHTML = [
+    commitment(v),
+    algorithm(v),
+    v.abandoned ? '' : winners(v),
+    order(v),
+    entries(v),
+  ].join('')
+
+  wireCopy()
+}
+
+/**
+ * The two halves, side by side — §3.
+ *
+ * "The streamer could not have chosen a favourable seed, because the seed was
+ * fixed and published-in-hash before they knew who would enter. And they could
+ * not have chosen a favourable entry list, because the entries arrived from
+ * chat. Neither half is under their control, and the two halves together are
+ * the whole result."
+ *
+ * So the page opens with both halves and says which came first. Everything
+ * after this is evidence for it.
+ */
+function commitment(v) {
+  return panel(
+    'The commitment',
+    `
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-md">
+      <div>
+        <div class="font-label-caps text-label-caps uppercase text-on-surface-variant mb-xs">
+          Fingerprint · posted to chat before the first entry
+        </div>
+        ${mono(v.seedHash ?? '—', 'text-primary')}
+        <p class="text-[13px] text-on-surface-variant/70 mt-sm leading-relaxed">
+          The first twelve characters of SHA-256 of the seed. It went out when entry opened, when nobody
+          knew who would enter — including the streamer.
+        </p>
+      </div>
+      <div>
+        <div class="font-label-caps text-label-caps uppercase text-on-surface-variant mb-xs">
+          Seed · published when the giveaway ended
+        </div>
+        ${mono(v.seed ?? '—', 'text-gold')}
+        <p class="text-[13px] text-on-surface-variant/70 mt-sm leading-relaxed">
+          Hash this and you get the fingerprint above. If they match, the seed was fixed before anyone typed.
+        </p>
+      </div>
+    </div>
+
+    <div class="mt-lg pt-md border-t border-outline-variant/50 flex flex-wrap items-center gap-sm">
+      <button data-copy="${escapeHtml(location.href)}"
+        class="px-md py-sm rounded-lg bg-surface-container-low hover:bg-surface-container-high
+               border border-outline-variant font-label-caps text-label-caps uppercase transition-colors">
+        Copy this link</button>
+      <a href="/api/verify/${escapeHtml(sessionId)}/entries.csv"
+        class="px-md py-sm rounded-lg bg-surface-container-low hover:bg-surface-container-high
+               border border-outline-variant font-label-caps text-label-caps uppercase transition-colors">
+        Download the entry list</a>
+    </div>`,
+  )
+}
+
+/**
+ * §3 — "a pointer to the documented draw function", written out.
+ *
+ * Prose plus numbered steps rather than a code listing, because the reader this
+ * page exists for is somebody in chat who thinks the giveaway was rigged, and
+ * the useful form of an argument for that reader is one they can follow without
+ * reading TypeScript.
+ */
+function algorithm(v) {
+  const a = v.algorithm ?? {}
+  return panel(
+    'How the order was worked out',
+    `
+    <p class="text-on-surface-variant mb-md leading-relaxed">${escapeHtml(a.summary ?? '')}</p>
+    <ol class="flex flex-col gap-sm">
+      ${(a.steps ?? [])
+        .map(
+          (step, i) => `
+        <li class="flex gap-md">
+          <span class="shrink-0 w-6 h-6 rounded-md bg-surface-container-lowest border border-outline-variant
+                       flex items-center justify-center font-data-mono text-[13px] text-primary">${i + 1}</span>
+          <span class="text-[14px] leading-relaxed text-on-surface-variant">${escapeHtml(step)}</span>
+        </li>`,
+        )
+        .join('')}
+    </ol>
+    ${a.note
+      ? `<p class="text-[13px] text-on-surface-variant/70 mt-md pt-md border-t border-outline-variant/50 leading-relaxed">
+           ${escapeHtml(a.note)}</p>`
+      : ''}`,
+  )
+}
+
+/**
+ * The winners record — §9, and §8.3's rule about showing the passovers.
+ *
+ * A page that listed only the winners would hide the exact moment this product
+ * most needs to be seen doing the honest thing. Every passed-over name is here,
+ * struck through and labelled, and a manual award says it was manual.
+ */
+function winners(v) {
+  const prizes = v.prizes ?? []
+  const awards = v.awards ?? []
+  const passovers = v.passovers ?? []
+  if (prizes.length === 0) return ''
+
+  return panel(
+    'What happened',
+    `<div class="flex flex-col divide-y divide-outline-variant/40">
+      ${prizes
+        .map((p) => {
+          const award = awards.find((a) => a.prizeIndex === p.index)
+          const passed = passovers.filter((x) => x.prizeIndex === p.index)
+
+          return `
+          <div class="py-md flex flex-col gap-sm">
+            <div class="flex flex-wrap items-baseline justify-between gap-sm">
+              <span class="text-gold font-bold">${escapeHtml(p.title)}</span>
+              <span class="font-data-mono ${award?.method === 'voided' ? 'text-loss' : 'text-on-surface'}">
+                ${award && award.username ? `@${escapeHtml(award.username)}` : 'nobody'}</span>
+            </div>
+            ${award ? methodLine(award) : ''}
+            ${
+              passed.length > 0
+                ? `<div class="flex flex-wrap gap-sm">
+                     ${passed
+                       .map(
+                         (x) => `
+                       <span class="text-[12px] px-sm py-xs rounded bg-surface-container-lowest
+                                    text-on-surface-variant">
+                         <span class="line-through">@${escapeHtml(x.username)}</span>
+                         <span class="text-loss ml-xs">${
+                           x.reason === 'expired' ? "didn't claim in time" : 'passed over by the streamer'
+                         }</span>
+                       </span>`,
+                       )
+                       .join('')}
+                   </div>`
+                : ''
+            }
+          </div>`
+        })
+        .join('')}
+    </div>
+    ${
+      v.claimRate === null || v.claimRate === undefined
+        ? ''
+        : `<div class="mt-md pt-md border-t border-outline-variant/50 text-[13px] text-on-surface-variant">
+             ${Math.round(v.claimRate * 100)}% of the people drawn claimed in time.
+           </div>`
+    }`,
+  )
+}
+
+/** §8.4 — a manual award is named as one, here as well as on the overlay. */
+function methodLine(award) {
+  if (award.method === 'claimed') {
+    return `<div class="text-[13px] text-win">Claimed in chat.</div>`
+  }
+  if (award.method === 'manual') {
+    return `<div class="text-[13px] text-gold">
+        Awarded by the streamer rather than claimed${award.manualReason ? ` — ${escapeHtml(award.manualReason)}` : ''}.
+      </div>`
+  }
+  return `<div class="text-[13px] text-loss">
+      Voided${award.manualReason ? ` — ${escapeHtml(award.manualReason)}` : ''}.
+    </div>`
+}
+
+/**
+ * §3 — "the draw produces an order, not a winner."
+ *
+ * The most important sentence in the specification, and the one thing a reader
+ * has to understand before the passovers above stop looking suspicious: a prize
+ * moving to the next name is a cursor advancing down this list, not a second
+ * draw. Showing the list is what makes that checkable rather than claimed.
+ */
+function order(v) {
+  const list = v.order ?? []
+  if (list.length === 0) return ''
+
+  const awarded = new Set((v.awards ?? []).map((a) => a.username).filter(Boolean))
+  const passed = new Set((v.passovers ?? []).map((p) => p.username))
+
+  return panel(
+    'The order the draw produced',
+    `
+    <p class="text-on-surface-variant mb-md leading-relaxed">
+      One run of the function above, against the seed and the entry list, produces this whole ranking.
+      Position 1 is the winner. A prize that goes unclaimed moves down it. There is no second draw anywhere
+      in this session, and there is no button in the product that would run one.
+    </p>
+    <div class="entry-scroll rounded-lg border border-outline-variant bg-surface-container-lowest">
+      ${list
+        .map(
+          (name, i) => `
+        <div class="flex items-center gap-md px-md py-xs border-b border-outline-variant/30 last:border-0">
+          <span class="font-data-mono text-on-surface-variant/60 w-10 shrink-0 text-right">${i + 1}</span>
+          <span class="truncate ${
+            awarded.has(name) ? 'text-win font-bold' : passed.has(name) ? 'text-on-surface-variant line-through' : ''
+          }">@${escapeHtml(name)}</span>
+          ${awarded.has(name) ? '<span class="text-[11px] text-win ml-auto shrink-0">won</span>' : ''}
+          ${passed.has(name) ? '<span class="text-[11px] text-loss ml-auto shrink-0">did not claim</span>' : ''}
+        </div>`,
+        )
+        .join('')}
+    </div>`,
+  )
+}
+
+/**
+ * §3 — the entry list in join order, with each entrant's weight.
+ *
+ * Join order rather than alphabetical or ranked, because join order is the
+ * input to step 1 of the algorithm: a reader working through the steps reads
+ * this list top to bottom and gets the same answer.
+ */
+function entries(v) {
+  const list = v.entries ?? []
+  if (list.length === 0) return ''
+
+  const weighted = list.some((e) => (e.weight ?? 1) !== 1)
+
+  return panel(
+    `Everyone who entered · ${list.length.toLocaleString()}`,
+    `
+    <p class="text-on-surface-variant mb-md leading-relaxed">
+      In the order they typed, which is the order the draw was computed against.
+      ${weighted
+        ? 'Weights were set before entry opened and frozen when each person entered.'
+        : 'Everyone had one entry — the draw was flat.'}
+    </p>
+    <div class="entry-scroll rounded-lg border border-outline-variant bg-surface-container-lowest">
+      ${list
+        .map(
+          (e, i) => `
+        <div class="flex items-center gap-md px-md py-xs border-b border-outline-variant/30 last:border-0">
+          <span class="font-data-mono text-on-surface-variant/60 w-12 shrink-0 text-right">${i + 1}</span>
+          <span class="truncate">@${escapeHtml(e.username)}</span>
+          ${weighted
+            ? `<span class="ml-auto shrink-0 font-data-mono text-[13px] ${
+                (e.weight ?? 1) > 1 ? 'text-primary' : 'text-on-surface-variant'
+              }">${e.weight}x</span>`
+            : ''}
+        </div>`,
+        )
+        .join('')}
+    </div>`,
+  )
+}
+
+// ─── chrome ─────────────────────────────────────────────────────────────────
+
+function panel(heading, inner) {
+  /*
+   * No backdrop blur, deliberately.
+   *
+   * These panels sit on a static grid, not over content, so a blur buys nothing
+   * visually — and it costs a compositing layer per panel on a page that is
+   * five panels tall and scrolls. On a long entry list that is the difference
+   * between a page that scrolls and one that stutters, and in some browsers it
+   * makes the panels fail to repaint on scroll entirely.
+   */
+  return `
+  <section class="bg-surface-container-low border border-outline-variant rounded-xl p-lg">
+    <h2 class="font-display-lg text-xl mb-md">${escapeHtml(heading)}</h2>
+    ${inner}
+  </section>`
+}
+
+function mono(value, tone) {
+  return `<div class="font-data-mono text-sm ${tone} bg-surface-container-lowest border border-outline-variant
+                      rounded-lg px-md py-sm break-all select-all">${escapeHtml(value)}</div>`
+}
+
+function wireCopy() {
+  for (const button of document.querySelectorAll('[data-copy]')) {
+    button.addEventListener('click', async () => {
+      await navigator.clipboard.writeText(button.dataset.copy).catch(() => {})
+      const original = button.textContent
+      button.textContent = 'Copied'
+      setTimeout(() => { button.textContent = original }, 1500)
+    })
+  }
+}
+</script>
+</body>
+</html>

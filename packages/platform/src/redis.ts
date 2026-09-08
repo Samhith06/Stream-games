@@ -17,6 +17,18 @@ export const KEY = {
   sessionFrame: (sessionId: string) => `session:${sessionId}:frame`,
   /** Step-3 lookup: broadcaster -> active session. The hottest key we have. */
   channelSession: (broadcasterUserId: string) => `channel:${broadcasterUserId}:session`,
+  /**
+   * The second pointer, for a `companion` game running alongside the first —
+   * see `GameModule.concurrency`.
+   *
+   * A second key rather than a set, deliberately. §10's whole argument is that
+   * "no active session" must be the fastest code in the system, and the router
+   * reads both pointers in one MGET: still one round trip, still two string
+   * reads, and the overwhelmingly common answer — both null — costs exactly
+   * what one null cost before. A set would have made the hot path an SMEMBERS
+   * returning an array to allocate and iterate on every ordinary chat line.
+   */
+  channelCompanion: (broadcasterUserId: string) => `channel:${broadcasterUserId}:companion`,
   /** Session metadata the router needs before it can decide anything. */
   sessionMeta: (sessionId: string) => `session:${sessionId}:meta`,
   dedupe: (kickMessageId: string) => `dedupe:${kickMessageId}`,
