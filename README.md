@@ -2,7 +2,12 @@
 
 Implementation of `StreamArena-Master-Spec.md`. Section references below (§7, §13…) point at that document.
 
-A **chat-driven game runtime** (§7) with two games as plugins: Bonus Hunt with Guess the Balance, and Slot Tournament. The runtime owns Kick, persistence, chat policy and transport; a game owns only its state, its reducer and its projection.
+A **chat-driven game runtime** (§7) with five games as plugins: Bonus Hunt with
+Guess the Balance, Slot Tournament, Slot Bingo, Team Battles and Giveaways. The
+runtime owns Kick, persistence, chat policy and transport; a game owns only its
+state, its reducer and its projection.
+
+**Live:** <https://web-production-37fea.up.railway.app>
 
 ---
 
@@ -339,6 +344,24 @@ node -e "console.log('SESSION_SECRET=' + require('crypto').randomBytes(48).toStr
 `WEB_PORT` falls back to `PORT`, which Railway, Render and Fly inject.
 
 ### Railway
+
+Project **streamarena**, environment **production**, at
+<https://web-production-37fea.up.railway.app>.
+
+**Pushing to `main` does not deploy.** The app services are not connected to the
+GitHub repo — they are deployed from a working copy by the CLI, so a push and a
+release are two separate acts:
+
+```bash
+railway link --project streamarena
+railway up --service web --detach
+railway up --service worker --detach
+```
+
+Both have to go out together for any change that crosses the two, which is most
+of them: the web app serves the projection the worker writes. Connecting the
+repo in each service's settings would make a push enough, and is worth doing the
+next time somebody is in there.
 
 Four services in one project: **Postgres**, **Redis**, **web**, **worker**. Both
 app services deploy from this repo and this Dockerfile — they differ only in
