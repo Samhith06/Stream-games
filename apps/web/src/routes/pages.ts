@@ -45,11 +45,32 @@ export async function registerPageRoutes(app: FastifyInstance, ctx: WebContext) 
   }
 
   /**
+   * The operator panel (§7). Gated here as well as on every /api/admin route,
+   * because a streamer who follows the link out of curiosity should land back
+   * on their own dashboard rather than on a shell of empty tables reporting
+   * four hundred and three.
+   *
+   * A redirect, not a 403: this is a page, and the JSON error handler that
+   * serves the API would render as a blank screen with a code on it.
+   */
+  app.get('/admin', async (req, reply) => {
+    const payload = readSession(ctx.env.SESSION_SECRET, req.cookies[SESSION_COOKIE])
+    if (!payload) return reply.redirect('/login')
+
+    const user = await ctx.repos.users.byId(payload.userId)
+    if (!user || !ctx.env.ADMIN_KICK_USER_IDS.includes(user.kickUserId)) {
+      return reply.redirect('/games')
+    }
+    return reply.sendFile('admin.html')
+  })
+
+  /**
    * The OBS browser source. The token is read by the page from its own path, so
    * it never appears in a query string that might end up in a log or a
    * screen-share of the address bar.
    */
   app.get('/overlay/:token', (_req, reply) => reply.sendFile('overlay.html'))
+
 
   /** Signed in goes to the catalog; everyone else to the login screen. */
   app.get('/', (req, reply) => {

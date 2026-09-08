@@ -1,0 +1,1132 @@
+<!DOCTYPE html>
+<html class="dark" lang="en">
+<head>
+<meta charset="utf-8"/><meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Admin · StreamArena</title>
+<link href="/tailwind.css" rel="stylesheet"/>
+<script src="/theme.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&family=Sora:wght@600;700;800&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<style>
+  .input-dark { background:rgb(var(--surface-container-lowest)); border:1px solid rgb(var(--outline-variant)); color:rgb(var(--on-surface)); }
+  .input-dark:focus { border-color:rgb(var(--tertiary)); box-shadow:0 0 0 1px rgb(var(--tertiary)); outline:none; }
+  /* §7 — "a visually distinct top bar so it is never mistaken for the streamer
+     dashboard". Gold hairline plus a diagonal hatch; nothing else in the app
+     looks like this. */
+  .operator-bar {
+    background:
+      repeating-linear-gradient(135deg, rgb(var(--gold) / .07) 0 8px, transparent 8px 16px),
+      rgb(var(--surface-container-lowest));
+  }
+  /* The catalog is meant to be dense — §7 lets the operator screens be plainer
+     and tighter than anything a streamer sees. */
+  .dense th { position:sticky; top:0; background:rgb(var(--surface-container)); z-index:10; }
+  .dense td, .dense th { padding:6px 10px; border-bottom:1px solid rgb(var(--outline-variant) / .25); }
+  .dense tbody tr:hover { background:rgb(var(--surface-container-high) / .5); }
+  .dense tbody tr[data-id] { cursor:pointer; }
+  kbd {
+    font-family:'JetBrains Mono', monospace; font-size:11px; padding:1px 6px;
+    border:1px solid rgb(var(--outline-variant)); border-bottom-width:2px;
+    border-radius:4px; background:rgb(var(--surface-container-highest)); color:rgb(var(--on-surface-variant));
+  }
+</style>
+</head>
+<body class="bg-background text-on-surface font-body-md antialiased flex">
+
+<aside class="h-screen w-56 fixed left-0 top-0 bg-surface-container-lowest border-r border-outline-variant flex flex-col p-sm z-50">
+  <div class="px-xs pt-sm pb-lg">
+    <div class="flex items-center gap-xs">
+      <span class="material-symbols-outlined text-gold text-[20px]">admin_panel_settings</span>
+      <h1 class="font-headline-md text-[18px] font-extrabold tracking-tight">Operator</h1>
+    </div>
+    <span class="font-data-mono text-[10px] uppercase tracking-widest text-gold/70">StreamArena admin</span>
+  </div>
+
+  <nav class="flex-1 flex flex-col gap-base" id="nav"></nav>
+
+  <a href="/games" class="flex items-center gap-sm px-md py-sm rounded-lg text-on-surface-variant
+     hover:bg-surface-container-high transition-colors text-[14px]">
+    <span class="material-symbols-outlined text-[20px]">arrow_back</span> Streamer dashboard
+  </a>
+</aside>
+
+<main class="flex-1 ml-56 min-h-screen flex flex-col">
+  <div class="operator-bar border-b border-gold/40 px-lg py-sm flex items-center justify-between sticky top-0 z-40">
+    <div class="flex items-center gap-sm">
+      <span class="bg-gold/15 text-gold border border-gold/40 rounded px-xs py-1 font-data-mono text-[10px]
+        uppercase tracking-widest font-bold">Operator console</span>
+      <span class="text-on-surface-variant text-[13px]" id="crumb">—</span>
+    </div>
+    <div class="flex items-center gap-md">
+      <span class="font-data-mono text-[11px] text-on-surface-variant" id="who">—</span>
+      <button id="refresh" class="text-on-surface-variant hover:text-on-surface p-1 rounded transition-colors"
+              title="Reload this view">
+        <span class="material-symbols-outlined text-[18px]">refresh</span>
+      </button>
+    </div>
+  </div>
+
+  <div class="flex-1 p-lg" id="view">
+    <div class="text-on-surface-variant font-data-mono py-xl text-center">Loading…</div>
+  </div>
+</main>
+
+<div id="drawer"></div>
+
+<script type="module">
+import { api, attempt, toast, escapeHtml, confirmAction, slotTile, $, $$ } from './app.js'
+
+// ─── shell ──────────────────────────────────────────────────────────────────
+
+const VIEWS = [
+  ['catalog',  'Slot catalog', 'casino'],
+  ['aliases',  'Alias queue',  'rule'],
+  ['health',   'Health',       'monitor_heart'],
+  ['channels', 'Channels',     'group'],
+]
+
+// The palette is left neutral on purpose. Every other page tints itself for
+// whatever game is live; this one is not about a game, and colouring it would
+// make it read as a streamer screen.
+window.setGameTheme?.(null)
+
+const me = await api('/api/me')
+if (!me.isAdmin) {
+  // The route redirects non-admins already, so reaching this means the cookie
+  // outlived the allowlist entry. Say so rather than showing empty tables.
+  document.body.innerHTML = `
+    <div class="min-h-screen w-full flex flex-col items-center justify-center gap-md text-center p-lg">
+      <span class="material-symbols-outlined text-[64px] text-on-surface-variant/30">lock</span>
+      <h1 class="font-headline-md text-headline-md">Not an operator account</h1>
+      <p class="text-on-surface-variant max-w-md">This console is limited to the Kick user ids in
+        <span class="font-data-mono text-[13px]">ADMIN_KICK_USER_IDS</span>.</p>
+      <a href="/games" class="bg-primary text-on-primary font-bold px-lg py-sm rounded-lg mt-sm">Back to dashboard</a>
+    </div>`
+  throw new Error('forbidden')
+}
+$('#who').textContent = me.user.displayName
+
+let current = location.hash.slice(1) || 'catalog'
+if (!VIEWS.some(([id]) => id === current)) current = 'catalog'
+
+function renderNav() {
+  $('#nav').innerHTML = VIEWS.map(([id, label, icon]) => `
+    <a href="#${id}" data-view="${id}"
+       class="flex items-center gap-sm px-md py-xs rounded-lg transition-colors text-[14px] ${
+         id === current
+           ? 'text-gold font-bold bg-gold/10'
+           : 'text-on-surface-variant font-medium hover:bg-surface-container-high'
+       }">
+      <span class="material-symbols-outlined text-[20px]">${icon}</span>${label}
+      <span class="ml-auto font-data-mono text-[11px] text-on-surface-variant/60" data-badge="${id}"></span>
+    </a>`).join('')
+}
+
+/** Nav counts survive a re-render of the nav itself, so they are re-applied. */
+const badges = {}
+function badge(id, text) {
+  badges[id] = text ?? ''
+  for (const [key, value] of Object.entries(badges)) {
+    const el = document.querySelector(`[data-badge="${key}"]`)
+    if (el) el.textContent = value
+  }
+}
+
+async function show(view) {
+  current = view
+  if (location.hash.slice(1) !== view) location.hash = view
+  renderNav()
+  badge(view, badges[view])
+  const label = VIEWS.find(([id]) => id === view)?.[1] ?? ''
+  $('#crumb').textContent = label
+  document.title = `${label} · Admin · StreamArena`
+  closeDrawer()
+  stopPolling()
+  $('#view').innerHTML = skeleton()
+
+  try {
+    if (view === 'catalog') await catalogView()
+    if (view === 'aliases') await aliasView()
+    if (view === 'health') await healthView()
+    if (view === 'channels') await channelsView()
+  } catch (err) {
+    if (err.message === 'unauthorized') return
+    $('#view').innerHTML = `
+      <div class="border border-error/40 bg-error/5 rounded-xl p-lg text-error">
+        <p class="font-bold mb-xs">Could not load ${escapeHtml(label)}</p>
+        <p class="font-data-mono text-[13px]">${escapeHtml(err.message)}</p>
+      </div>`
+  }
+}
+
+/** §8 — skeleton blocks matching the layout, never a centred spinner. */
+const skeleton = () => `
+  <div class="animate-pulse space-y-sm">
+    <div class="h-8 w-64 bg-surface-container rounded"></div>
+    <div class="h-24 bg-surface-container rounded-xl"></div>
+    ${Array.from({ length: 8 }, () => '<div class="h-9 bg-surface-container/60 rounded"></div>').join('')}
+  </div>`
+
+window.addEventListener('hashchange', () => {
+  const next = location.hash.slice(1) || 'catalog'
+  if (next !== current) show(next)
+})
+$('#refresh').addEventListener('click', () => show(current))
+
+// ─── §7.1 slot catalog ──────────────────────────────────────────────────────
+
+const num = (n) => (n === null || n === undefined ? '—' : Number(n).toLocaleString('en-US'))
+
+let catalogRows = []
+let catalogQuery = ''
+// §7.1 — "Sort by times requested descending as the default view. The most
+// requested slots are the ones whose data being wrong hurts most."
+let catalogSort = { key: 'requestCount', dir: -1 }
+
+const COLUMNS = [
+  ['name', 'Slot', 'text-left'],
+  ['provider', 'Provider', 'text-left'],
+  ['buyCostX', 'Buy', 'text-right'],
+  ['hasBonusBuy', 'Bonus buy', 'text-center'],
+  ['volatility', 'Volatility', 'text-left'],
+  ['rtp', 'RTP', 'text-right'],
+  ['aliasCount', 'Aliases', 'text-right'],
+  ['requestCount', 'Requests', 'text-right'],
+]
+
+async function catalogView() {
+  $('#view').innerHTML = `
+    <header class="flex flex-wrap items-end justify-between gap-md mb-md">
+      <div>
+        <h2 class="font-headline-md text-headline-md">Slot catalog</h2>
+        <p class="text-on-surface-variant text-[14px] mt-base">
+          Name matching is what makes every game feel magic or feel stupid. This is where it gets fixed.
+        </p>
+      </div>
+      <div class="flex items-center gap-sm">
+        <div class="flex items-center gap-xs input-dark rounded px-sm">
+          <span class="material-symbols-outlined text-[18px] text-on-surface-variant">search</span>
+          <input id="q" placeholder="Search slot names" value="${escapeHtml(catalogQuery)}"
+                 class="bg-transparent border-none focus:ring-0 font-data-mono text-[13px] py-xs px-0 w-64">
+        </div>
+        <button id="new-slot" class="bg-primary text-on-primary font-bold px-md py-xs rounded-lg
+                flex items-center gap-xs text-[14px]">
+          <span class="material-symbols-outlined text-[18px]">add</span> New slot
+        </button>
+      </div>
+    </header>
+
+    <div class="bg-surface-container rounded-xl border border-outline-variant/40 overflow-hidden">
+      <div class="max-h-[calc(100vh-260px)] overflow-auto">
+        <table class="dense w-full font-data-mono text-[12px]" id="table"></table>
+      </div>
+    </div>
+    <p class="text-on-surface-variant/60 text-[11px] mt-xs font-data-mono" id="count"></p>`
+
+  let timer
+  $('#q').addEventListener('input', (e) => {
+    clearTimeout(timer)
+    catalogQuery = e.target.value
+    timer = setTimeout(() => loadCatalog().catch((err) => toast(err.message, 'error')), 250)
+  })
+  $('#new-slot').addEventListener('click', () => openSlotDrawer(null))
+
+  await loadCatalog()
+}
+
+async function loadCatalog() {
+  const q = catalogQuery.trim()
+  const { slots } = await api(`/api/admin/slots?limit=200${q ? `&q=${encodeURIComponent(q)}` : ''}`)
+  catalogRows = slots
+  drawCatalog()
+}
+
+function drawCatalog() {
+  const rows = [...catalogRows].sort((a, b) => {
+    const { key, dir } = catalogSort
+    const x = a[key]
+    const y = b[key]
+    if (x === y) return a.name.localeCompare(b.name)
+    // Unknowns sink whichever way the column is pointing — a null RTP is not
+    // "the lowest RTP", and sorting it as one hides the rows that need data.
+    if (x === null || x === undefined) return 1
+    if (y === null || y === undefined) return -1
+    if (typeof x === 'string') return x.localeCompare(y) * dir
+    return (Number(x) - Number(y)) * dir
+  })
+
+  const head = COLUMNS.map(([key, label, align]) => `
+    <th data-sort="${key}" class="${align} font-label-caps text-[10px] uppercase tracking-widest
+        text-on-surface-variant cursor-pointer select-none whitespace-nowrap">
+      ${label}${catalogSort.key === key ? (catalogSort.dir === -1 ? ' ↓' : ' ↑') : ''}
+    </th>`).join('')
+
+  $('#table').innerHTML = `
+    <thead><tr><th class="w-8"></th>${head}</tr></thead>
+    <tbody>${
+      rows.length === 0
+        ? `<tr><td colspan="9" class="text-center text-on-surface-variant py-xl">
+             ${catalogQuery
+               ? 'No slots match this search. <button id="clear-q" class="text-primary underline">Clear it</button>'
+               : 'The catalog is empty. Seed it, or add a slot by hand.'}
+           </td></tr>`
+        : rows.map((s) => `
+          <tr data-id="${s.id}">
+            <td>${slotTile(s.name, s.thumbnail, 'w-7 h-7 rounded object-cover text-[9px]')}</td>
+            <td class="text-left font-sans font-medium text-[13px] text-on-surface">
+              ${escapeHtml(s.name)}
+              ${s.isCustom ? '<span class="ml-xs text-[9px] uppercase tracking-widest text-tertiary">custom</span>' : ''}
+            </td>
+            <td class="text-left text-on-surface-variant">${escapeHtml(s.provider ?? '—')}</td>
+            <td class="text-right">${blankable(s.buyCostX, (v) => `${Number(v)}x`)}</td>
+            <td class="text-center">${bonusBuyCell(s.hasBonusBuy)}</td>
+            <td class="text-left text-on-surface-variant">${escapeHtml(s.volatility ?? '—')}</td>
+            <td class="text-right">${blankable(s.rtp, (v) => `${Number(v).toFixed(2)}%`)}</td>
+            <td class="text-right ${s.aliasCount === 0 ? 'text-on-surface-variant/40' : 'text-on-surface-variant'}">${num(s.aliasCount)}</td>
+            <td class="text-right ${s.requestCount > 0 ? 'text-gold font-bold' : 'text-on-surface-variant/40'}">${num(s.requestCount)}</td>
+          </tr>`).join('')
+    }</tbody>`
+
+  $('#count').textContent =
+    `${rows.length} slot${rows.length === 1 ? '' : 's'}` +
+    (rows.length >= 200 ? ' — first 200 only, narrow the search to reach the rest' : '')
+
+  const clear = $('#clear-q')
+  if (clear) {
+    clear.addEventListener('click', () => {
+      catalogQuery = ''
+      $('#q').value = ''
+      loadCatalog()
+    })
+  }
+
+  for (const th of $$('[data-sort]')) {
+    th.addEventListener('click', () => {
+      const key = th.dataset.sort
+      catalogSort = { key, dir: catalogSort.key === key ? -catalogSort.dir : -1 }
+      drawCatalog()
+    })
+  }
+  for (const tr of $$('#table tbody tr[data-id]')) {
+    tr.addEventListener('click', () => openSlotDrawer(catalogRows.find((s) => s.id === tr.dataset.id)))
+  }
+}
+
+const blankable = (value, format) =>
+  value === null || value === undefined
+    ? '<span class="text-on-surface-variant/40">—</span>'
+    : escapeHtml(format(value))
+
+/** Tri-state, and it has to read as one — null is "we don't know", not "no". */
+const bonusBuyCell = (value) =>
+  value === true
+    ? '<span class="text-win">yes</span>'
+    : value === false
+      ? '<span class="text-on-surface-variant">no</span>'
+      : '<span class="text-on-surface-variant/40">?</span>'
+
+// ─── the edit drawer ────────────────────────────────────────────────────────
+
+function closeDrawer() {
+  $('#drawer').innerHTML = ''
+}
+
+async function openSlotDrawer(slot) {
+  const creating = !slot
+  const aliases = creating ? [] : (await api(`/api/admin/slots/${slot.id}/aliases`)).aliases
+
+  const field = (id, label, value, extra = '') => `
+    <label class="block">
+      <span class="block font-label-caps text-[10px] uppercase tracking-widest text-on-surface-variant mb-xs">${label}</span>
+      <input id="f-${id}" value="${value === null || value === undefined ? '' : escapeHtml(value)}" ${extra}
+             class="input-dark w-full rounded px-sm py-xs font-data-mono text-[13px]">
+    </label>`
+
+  $('#drawer').innerHTML = `
+    <div class="fixed inset-0 z-[150] bg-black/60 backdrop-blur-sm" data-backdrop></div>
+    <aside class="fixed right-0 top-0 h-screen w-[440px] max-w-full z-[151] bg-surface-container
+                  border-l border-outline-variant shadow-2xl flex flex-col">
+      <header class="p-md border-b border-outline-variant flex items-start justify-between gap-sm">
+        <div class="min-w-0">
+          <h3 class="font-headline-md text-[18px] font-bold truncate">${creating ? 'New slot' : escapeHtml(slot.name)}</h3>
+          <p class="font-data-mono text-[11px] text-on-surface-variant truncate">
+            ${creating ? 'Added by hand — it resolves like any other' : escapeHtml(slot.id)}</p>
+        </div>
+        <button data-close class="text-on-surface-variant hover:text-on-surface p-1">
+          <span class="material-symbols-outlined">close</span></button>
+      </header>
+
+      <div class="flex-1 overflow-auto p-md space-y-sm">
+        ${field('name', 'Canonical name', slot?.name ?? '')}
+        ${field('provider', 'Provider', slot?.provider ?? '')}
+        <div class="grid grid-cols-2 gap-sm">
+          ${field('rtp', 'RTP %', slot?.rtp ?? '', 'type="number" step="0.01" min="0" max="100"')}
+          ${field('maxWin', 'Max win (x)', slot?.maxWin ?? '', 'type="number" step="1" min="0"')}
+          ${field('buyCostX', 'Buy cost (x bet)', slot?.buyCostX ?? '', 'type="number" step="0.01" min="0"')}
+          <label class="block">
+            <span class="block font-label-caps text-[10px] uppercase tracking-widest text-on-surface-variant mb-xs">Volatility</span>
+            <select id="f-volatility" class="input-dark w-full rounded px-sm py-xs font-data-mono text-[13px]">
+              ${['', 'low', 'medium', 'high', 'very-high'].map((v) => `
+                <option value="${v}" ${(slot?.volatility ?? '') === v ? 'selected' : ''}>${v || 'unknown'}</option>`).join('')}
+            </select>
+          </label>
+        </div>
+        <label class="block">
+          <span class="block font-label-caps text-[10px] uppercase tracking-widest text-on-surface-variant mb-xs">Bonus buy</span>
+          <select id="f-hasBonusBuy" class="input-dark w-full rounded px-sm py-xs font-data-mono text-[13px]">
+            <option value="" ${slot?.hasBonusBuy === true || slot?.hasBonusBuy === false ? '' : 'selected'}>unknown</option>
+            <option value="true" ${slot?.hasBonusBuy === true ? 'selected' : ''}>yes</option>
+            <option value="false" ${slot?.hasBonusBuy === false ? 'selected' : ''}>no</option>
+          </select>
+        </label>
+        ${field('thumbnail', 'Thumbnail URL', slot?.thumbnail ?? '', 'type="url"')}
+
+        ${creating ? '' : `
+          <div class="pt-sm">
+            <span class="font-label-caps text-[10px] uppercase tracking-widest text-on-surface-variant">
+              Aliases (${aliases.length})</span>
+            <div class="flex gap-xs mt-xs mb-sm">
+              <input id="alias-new" placeholder="add an alias" maxlength="60"
+                     class="input-dark flex-1 rounded px-sm py-xs font-data-mono text-[13px]">
+              <button id="alias-add" class="bg-surface-variant hover:bg-surface-bright px-sm rounded text-[13px] font-bold">Add</button>
+            </div>
+            <div class="flex flex-col gap-1">
+              ${aliases.length === 0
+                ? '<p class="text-on-surface-variant/60 text-[12px]">No aliases. Viewers have to type the name exactly.</p>'
+                : aliases.map((a) => `
+                  <div class="flex items-center gap-xs bg-surface-container-lowest rounded px-sm py-1">
+                    <span class="font-data-mono text-[12px] flex-1 truncate">${escapeHtml(a.alias)}</span>
+                    <span class="font-data-mono text-[10px] text-on-surface-variant/60">${num(a.hitCount)}×</span>
+                    ${a.approved
+                      ? '<span class="text-[9px] uppercase tracking-widest text-win">live</span>'
+                      : '<span class="text-[9px] uppercase tracking-widest text-tertiary">pending</span>'}
+                    <button data-drop-alias="${a.id}" class="text-on-surface-variant/40 hover:text-error">
+                      <span class="material-symbols-outlined text-[16px]">close</span></button>
+                  </div>`).join('')}
+            </div>
+          </div>`}
+      </div>
+
+      <footer class="p-md border-t border-outline-variant flex items-center gap-sm">
+        <button id="slot-save" class="bg-primary text-on-primary font-bold px-md py-xs rounded-lg flex-1 text-[14px]">
+          ${creating ? 'Create slot' : 'Save changes'}</button>
+        ${creating ? '' : `
+          <button id="slot-delete" class="border border-error/50 text-error hover:bg-error/10 px-md py-xs rounded-lg text-[14px]">
+            Delete</button>`}
+      </footer>
+    </aside>`
+
+  $('[data-backdrop]').addEventListener('click', closeDrawer)
+  $('[data-close]').addEventListener('click', closeDrawer)
+  $('#f-name').focus()
+
+  const read = () => {
+    const text = (id) => {
+      const value = $(`#f-${id}`).value.trim()
+      return value === '' ? null : value
+    }
+    const number = (id) => {
+      const value = text(id)
+      return value === null ? null : Number(value)
+    }
+    const maxWin = number('maxWin')
+    return {
+      name: $('#f-name').value.trim(),
+      provider: text('provider'),
+      rtp: number('rtp'),
+      maxWin: maxWin === null ? null : Math.round(maxWin),
+      buyCostX: number('buyCostX'),
+      hasBonusBuy: $('#f-hasBonusBuy').value === '' ? null : $('#f-hasBonusBuy').value === 'true',
+      volatility: text('volatility'),
+      thumbnail: text('thumbnail'),
+    }
+  }
+
+  $('#slot-save').addEventListener('click', async () => {
+    const body = read()
+    if (body.name === '') {
+      toast('A slot needs a name', 'error')
+      return
+    }
+    await attempt(
+      () => creating
+        ? api('/api/admin/slots', { method: 'POST', body })
+        : api(`/api/admin/slots/${slot.id}`, { method: 'PATCH', body }),
+      { success: creating ? 'Slot created' : 'Saved' },
+    )
+    closeDrawer()
+    await loadCatalog()
+  })
+
+  if (creating) return
+
+  $('#slot-delete').addEventListener('click', async () => {
+    const ok = await confirmAction({
+      title: `Delete ${slot.name}?`,
+      body: 'Its aliases go with it. Sessions that already recorded this slot keep the name they stored.',
+      confirmLabel: 'Delete',
+      destructive: true,
+    })
+    if (!ok) return
+    await attempt(() => api(`/api/admin/slots/${slot.id}`, { method: 'DELETE' }), { success: 'Deleted' })
+    closeDrawer()
+    await loadCatalog()
+  })
+
+  const addAlias = async () => {
+    const alias = $('#alias-new').value.trim()
+    if (alias === '') return
+    await attempt(() => api(`/api/admin/slots/${slot.id}/aliases`, { method: 'POST', body: { alias } }),
+      { success: `"${alias}" now resolves to ${slot.name}` })
+    await openSlotDrawer(slot)
+    await loadCatalog()
+  }
+  $('#alias-add').addEventListener('click', addAlias)
+  $('#alias-new').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') addAlias()
+  })
+
+  for (const button of $$('[data-drop-alias]')) {
+    button.addEventListener('click', async () => {
+      await attempt(() => api(`/api/admin/aliases/${button.dataset.dropAlias}/reject`, { method: 'POST' }))
+      await openSlotDrawer(slot)
+      await loadCatalog()
+    })
+  }
+}
+
+// ─── §7.2 alias review queue ────────────────────────────────────────────────
+
+let queue = []
+let cursor = 0
+/** Ids skipped with N — held out until the queue is reloaded, not lost. */
+const skipped = new Set()
+
+async function aliasView() {
+  const { queue: rows } = await api('/api/admin/aliases/queue?limit=200')
+  queue = rows
+  cursor = 0
+  skipped.clear()
+  badge('aliases', rows.length ? String(rows.length) : '')
+
+  const repeated = rows.filter((row) => row.alias.hitCount > 1).length
+
+  $('#view').innerHTML = `
+    <header class="flex flex-wrap items-end justify-between gap-md mb-lg">
+      <div>
+        <h2 class="font-headline-md text-headline-md">Alias review queue</h2>
+        <p class="font-data-mono text-[13px] text-on-surface-variant mt-base" id="queue-count">
+          ${rows.length} unresolved · ${repeated} seen more than once
+        </p>
+      </div>
+      <div class="flex items-center gap-sm text-[11px] text-on-surface-variant">
+        <span><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> accept</span>
+        <span><kbd>S</kbd> search</span>
+        <span><kbd>D</kbd> discard</span>
+        <span><kbd>N</kbd> skip</span>
+      </div>
+    </header>
+    <div class="max-w-[820px] mx-auto" id="item"></div>`
+
+  await drawItem()
+}
+
+function currentItem() {
+  while (cursor < queue.length && skipped.has(queue[cursor].alias.id)) cursor++
+  return queue[cursor] ?? null
+}
+
+async function drawItem() {
+  const host = $('#item')
+  if (!host) return
+  const item = currentItem()
+
+  if (!item) {
+    host.innerHTML = `
+      <div class="text-center py-xl">
+        <span class="material-symbols-outlined text-[80px] text-win/20">task_alt</span>
+        <h3 class="font-headline-md text-headline-md mt-sm">${skipped.size ? 'Nothing left but skips' : 'Queue clear'}</h3>
+        <p class="text-on-surface-variant mt-xs">
+          ${skipped.size
+            ? `${skipped.size} item${skipped.size === 1 ? '' : 's'} skipped. Reload to work them again.`
+            : 'Every learned alias has been reviewed. New ones arrive as viewers type them.'}
+        </p>
+        <button id="requeue" class="mt-md bg-primary text-on-primary font-bold px-lg py-sm rounded-lg">Reload queue</button>
+      </div>`
+    $('#requeue').addEventListener('click', () => show('aliases'))
+    return
+  }
+
+  const { alias, slot } = item
+  const bound = {
+    slotId: slot.id,
+    name: slot.name,
+    provider: slot.provider,
+    thumbnail: slot.thumbnail,
+    confidence: null,
+  }
+
+  // The bound slot is candidate 1 — it is the match the resolver already made,
+  // and confirming it is the common case. The alternatives load after paint so
+  // the raw string is readable immediately.
+  host.innerHTML = `
+    <div class="bg-surface-container rounded-xl border border-outline-variant/40 p-lg">
+      <div class="flex items-start justify-between gap-md mb-md">
+        <div class="min-w-0">
+          <span class="font-label-caps text-[10px] uppercase tracking-widest text-on-surface-variant">Viewer typed</span>
+          <p class="font-data-mono text-[24px] font-bold text-on-surface break-words mt-xs">${escapeHtml(alias.alias)}</p>
+          <p class="font-data-mono text-[11px] text-on-surface-variant/60 mt-xs">
+            normalised · ${escapeHtml(alias.normalised)}</p>
+        </div>
+        <div class="text-right shrink-0">
+          <p class="font-data-mono text-[28px] font-bold ${alias.hitCount > 1 ? 'text-gold' : 'text-on-surface-variant'}">
+            ${num(alias.hitCount)}<span class="text-[14px]">×</span></p>
+          <p class="font-label-caps text-[10px] uppercase tracking-widest text-on-surface-variant">requests</p>
+          <p class="font-data-mono text-[11px] text-on-surface-variant/60 mt-xs">
+            first seen ${escapeHtml(new Date(alias.createdAt).toLocaleDateString())}</p>
+        </div>
+      </div>
+
+      <span class="font-label-caps text-[10px] uppercase tracking-widest text-on-surface-variant">Candidates</span>
+      <div class="grid gap-sm mt-xs" id="candidates">
+        ${candidateCard(1, bound, true)}
+        <p class="font-data-mono text-[12px] text-on-surface-variant/50 py-xs">Looking for alternatives…</p>
+      </div>
+
+      <div class="flex items-center gap-sm mt-lg pt-md border-t border-outline-variant/30">
+        <button data-act="search" class="border border-outline-variant hover:border-primary px-md py-xs rounded-lg
+                text-[13px] flex items-center gap-xs"><kbd>S</kbd> Search manually</button>
+        <button data-act="discard" class="border border-error/40 text-error hover:bg-error/10 px-md py-xs rounded-lg
+                text-[13px] flex items-center gap-xs"><kbd>D</kbd> Unmatchable</button>
+        <button data-act="skip" class="text-on-surface-variant hover:text-on-surface px-md py-xs rounded-lg
+                text-[13px] flex items-center gap-xs"><kbd>N</kbd> Skip</button>
+        <span class="ml-auto font-data-mono text-[11px] text-on-surface-variant/60">${queue.length - cursor} left</span>
+      </div>
+    </div>`
+
+  for (const button of $$('[data-act]')) {
+    button.addEventListener('click', () => {
+      if (button.dataset.act === 'search') return openAliasSearch(item)
+      if (button.dataset.act === 'discard') return discard(item)
+      if (button.dataset.act === 'skip') return skip(item)
+    })
+  }
+  bindCandidate(1, item, slot.id)
+
+  const { candidates } = await api(`/api/admin/aliases/${alias.id}/candidates`)
+  // The queue may have moved on while that was in flight.
+  if (currentItem()?.alias.id !== alias.id) return
+
+  const alternatives = candidates.map((c, i) => candidateCard(i + 2, c, false)).join('')
+  $('#candidates').innerHTML = candidateCard(1, bound, true) + (alternatives || `
+    <p class="font-data-mono text-[12px] text-on-surface-variant/50 py-xs">
+      No other slot comes close. Accept, search, or discard.</p>`)
+
+  bindCandidate(1, item, slot.id)
+  candidates.forEach((c, i) => bindCandidate(i + 2, item, c.slotId))
+}
+
+function candidateCard(key, candidate, isMatch) {
+  const pct = candidate.confidence === null ? null : Math.round(candidate.confidence * 100)
+  const score = pct === null
+    ? ''
+    : pct >= 70
+      ? `<span class="font-data-mono text-[13px] text-win">${pct}%</span>`
+      : pct >= 50
+        ? `<span class="font-data-mono text-[13px] text-gold">${pct}%</span>`
+        : `<span class="font-data-mono text-[13px] text-on-surface-variant">${pct}%</span>`
+
+  return `
+    <button data-candidate="${key}" data-slot="${candidate.slotId}"
+       class="w-full text-left flex items-center gap-sm p-sm rounded-lg border transition-colors ${
+         isMatch
+           ? 'border-primary/50 bg-primary/5 hover:bg-primary/10'
+           : 'border-outline-variant/40 hover:border-outline hover:bg-surface-container-high'
+       }">
+      <kbd class="shrink-0">${key}</kbd>
+      ${slotTile(candidate.name, candidate.thumbnail, 'w-11 h-11 rounded object-cover text-[11px] shrink-0')}
+      <div class="min-w-0 flex-1">
+        <p class="font-medium text-[14px] truncate">${escapeHtml(candidate.name)}</p>
+        <p class="font-data-mono text-[11px] text-on-surface-variant truncate">
+          ${escapeHtml(candidate.provider ?? 'unknown provider')}</p>
+      </div>
+      <div class="shrink-0 text-right">
+        ${isMatch
+          ? '<span class="font-label-caps text-[10px] uppercase tracking-widest text-primary">resolver match</span>'
+          : score}
+      </div>
+    </button>`
+}
+
+function bindCandidate(key, item, slotId) {
+  const el = document.querySelector(`[data-candidate="${key}"]`)
+  if (el) el.onclick = () => accept(item, slotId)
+}
+
+async function accept(item, slotId) {
+  const { alias, slot } = item
+  const same = slotId === slot.id
+  advance()
+
+  await attempt(() => same
+    ? api(`/api/admin/aliases/${alias.id}/approve`, { method: 'POST' })
+    : api(`/api/admin/aliases/${alias.id}/reassign`, { method: 'POST', body: { slotId } }))
+
+  // §7.2 — undo lives in a toast for eight seconds. Approve leaves the row in
+  // place, so undoing it has to delete that row before putting the pending one
+  // back; reassign already deleted it, so it must not.
+  undoToast(`"${alias.alias}" accepted`, () =>
+    api('/api/admin/aliases/reinstate', {
+      method: 'POST',
+      body: {
+        slotId: slot.id,
+        alias: alias.alias,
+        hitCount: alias.hitCount,
+        weight: alias.weight,
+        ...(same ? { replaces: alias.id } : {}),
+      },
+    }))
+}
+
+async function discard(item) {
+  const { alias, slot } = item
+  advance()
+  await attempt(() => api(`/api/admin/aliases/${alias.id}/reject`, { method: 'POST' }))
+  undoToast(`"${alias.alias}" discarded`, () =>
+    api('/api/admin/aliases/reinstate', {
+      method: 'POST',
+      body: { slotId: slot.id, alias: alias.alias, hitCount: alias.hitCount, weight: alias.weight },
+    }))
+}
+
+function skip(item) {
+  skipped.add(item.alias.id)
+  advance()
+}
+
+/** Every action advances immediately — §7.2 is worked in bursts. */
+function advance() {
+  cursor++
+  drawItem()
+  const left = queue.length - cursor
+  badge('aliases', left > 0 ? String(left) : '')
+  const counter = $('#queue-count')
+  if (counter) counter.textContent = `${Math.max(0, left)} unresolved · ${skipped.size} skipped`
+}
+
+/**
+ * A toast that can be taken back for eight seconds.
+ *
+ * Deliberately not app.js's toast(): that one is fire-and-forget text, and this
+ * needs a control inside it. Undo reloads the queue rather than splicing the
+ * row back in locally, because the reinstated alias is a new row with a new id
+ * and the local copy would be a lie the next keystroke acts on.
+ */
+function undoToast(message, undo) {
+  let host = document.getElementById('toasts')
+  if (!host) {
+    host = document.createElement('div')
+    host.id = 'toasts'
+    host.className = 'fixed bottom-6 right-6 z-[100] flex flex-col gap-2 items-end'
+    document.body.appendChild(host)
+  }
+
+  const el = document.createElement('div')
+  el.className = 'bg-surface-container border border-outline-variant rounded-lg px-4 py-3 shadow-xl ' +
+    'text-sm max-w-sm flex items-center gap-4'
+  el.innerHTML = `
+    <span class="truncate">${escapeHtml(message)}</span>
+    <button class="font-label-caps text-[11px] uppercase tracking-widest text-primary shrink-0">Undo</button>
+    <span class="font-data-mono text-[11px] text-on-surface-variant/50 shrink-0" data-left>8</span>`
+
+  let left = 8
+  const tick = setInterval(() => {
+    left--
+    const counter = el.querySelector('[data-left]')
+    if (counter) counter.textContent = String(left)
+    if (left <= 0) {
+      clearInterval(tick)
+      el.remove()
+    }
+  }, 1000)
+
+  el.querySelector('button').onclick = async () => {
+    clearInterval(tick)
+    el.remove()
+    await attempt(undo, { success: 'Put back in the queue' })
+    show('aliases')
+  }
+
+  host.appendChild(el)
+}
+
+/** §7.2's `S` — the resolver's match was wrong and none of the fuzzy ones are right. */
+async function openAliasSearch(item) {
+  $('#drawer').innerHTML = `
+    <div class="fixed inset-0 z-[150] bg-black/60 backdrop-blur-sm flex items-start justify-center pt-[12vh] p-gutter"
+         data-backdrop>
+      <div class="bg-surface-container rounded-xl border border-outline-variant shadow-2xl w-full max-w-lg overflow-hidden">
+        <div class="p-md border-b border-outline-variant">
+          <p class="font-label-caps text-[10px] uppercase tracking-widest text-on-surface-variant mb-xs">
+            Which slot is "${escapeHtml(item.alias.alias)}"?</p>
+          <input id="alias-search" placeholder="Type a slot name" autocomplete="off"
+                 class="input-dark w-full rounded px-sm py-xs font-data-mono text-[14px]">
+        </div>
+        <div class="max-h-[45vh] overflow-auto p-xs" id="alias-results">
+          <p class="text-on-surface-variant/60 text-[12px] p-sm font-data-mono">Searching…</p>
+        </div>
+      </div>
+    </div>`
+
+  $('[data-backdrop]').addEventListener('click', (e) => {
+    if (e.target.hasAttribute('data-backdrop')) closeDrawer()
+  })
+
+  const input = $('#alias-search')
+  input.value = item.alias.alias
+  input.select()
+  input.focus()
+
+  let timer
+  const run = async () => {
+    const q = input.value.trim()
+    if (q === '') return
+    const { slots } = await api(`/api/admin/slots?limit=12&q=${encodeURIComponent(q)}`)
+    $('#alias-results').innerHTML = slots.length === 0
+      ? '<p class="text-on-surface-variant/60 text-[12px] p-sm font-data-mono">Nothing matches that name.</p>'
+      : slots.map((s) => `
+          <button data-pick="${s.id}" class="w-full text-left flex items-center gap-sm p-xs rounded-lg
+                  hover:bg-surface-container-high transition-colors">
+            ${slotTile(s.name, s.thumbnail, 'w-9 h-9 rounded object-cover text-[10px] shrink-0')}
+            <div class="min-w-0">
+              <p class="text-[14px] truncate">${escapeHtml(s.name)}</p>
+              <p class="font-data-mono text-[11px] text-on-surface-variant truncate">${escapeHtml(s.provider ?? '—')}</p>
+            </div>
+          </button>`).join('')
+
+    for (const button of $$('[data-pick]')) {
+      button.addEventListener('click', () => {
+        closeDrawer()
+        accept(item, button.dataset.pick)
+      })
+    }
+  }
+
+  input.addEventListener('input', () => {
+    clearTimeout(timer)
+    timer = setTimeout(() => run().catch((err) => toast(err.message, 'error')), 200)
+  })
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeDrawer()
+  })
+  await run()
+}
+
+/**
+ * §7.2 is keyboard-first. Guarded on the view and on focus, so typing a slot
+ * name into the manual-search box does not discard the item behind it.
+ */
+document.addEventListener('keydown', (e) => {
+  if (current !== 'aliases') return
+  if (e.metaKey || e.ctrlKey || e.altKey) return
+  const tag = document.activeElement?.tagName
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+
+  const item = currentItem()
+  if (!item) return
+
+  const key = e.key.toLowerCase()
+  if (key === '1' || key === '2' || key === '3') {
+    const el = document.querySelector(`[data-candidate="${key}"]`)
+    if (!el) return
+    e.preventDefault()
+    accept(item, el.dataset.slot)
+    return
+  }
+  if (key === 's') {
+    e.preventDefault()
+    openAliasSearch(item)
+  }
+  if (key === 'd') {
+    e.preventDefault()
+    discard(item)
+  }
+  if (key === 'n') {
+    e.preventDefault()
+    skip(item)
+  }
+})
+
+// ─── §7.3 health ────────────────────────────────────────────────────────────
+
+/** Kick's documented ceiling for webhook deliveries per day (§6.3). */
+const DELIVERY_CEILING = 10_000
+
+let poll = null
+function stopPolling() {
+  if (poll) {
+    clearInterval(poll)
+    poll = null
+  }
+}
+
+async function healthView() {
+  const render = async () => {
+    const [health, quota, { channels }] = await Promise.all([
+      api('/api/admin/health'),
+      api('/api/admin/quota?days=14'),
+      api('/api/admin/channels'),
+    ])
+
+    const live = channels.filter((c) => c.activeSession)
+    const subscriptions = channels.reduce((n, c) => n + c.liveSubscriptions, 0)
+    const counts = Object.values(health.queues)
+    const failed = counts.reduce((n, q) => n + (q.failed ?? 0), 0)
+    const waiting = counts.reduce((n, q) => n + (q.waiting ?? 0), 0)
+    const used = quota.todayTotal / DELIVERY_CEILING
+
+    $('#view').innerHTML = `
+      <header class="flex items-end justify-between gap-md mb-md">
+        <div>
+          <h2 class="font-headline-md text-headline-md">System health</h2>
+          <p class="text-on-surface-variant text-[14px] mt-base">Refreshes every ten seconds.</p>
+        </div>
+        <button id="reconcile" class="border border-outline-variant hover:border-primary px-md py-xs rounded-lg
+                text-[13px] flex items-center gap-xs">
+          <span class="material-symbols-outlined text-[18px]">sync</span> Reconcile subscriptions
+        </button>
+      </header>
+
+      <section class="grid grid-cols-2 lg:grid-cols-5 gap-sm mb-md">
+        ${tile('Active sessions', num(health.activeSessions), live.length ? 'text-win' : 'text-on-surface')}
+        ${tile('Live subscriptions', num(subscriptions), 'text-on-surface')}
+        ${tile('Jobs waiting', num(waiting), waiting > 100 ? 'text-gold' : 'text-on-surface')}
+        ${tile('Jobs failed', num(failed), failed > 0 ? 'text-error' : 'text-on-surface')}
+        ${tile('Games registered', num(health.games.length), 'text-on-surface')}
+      </section>
+
+      <section class="grid grid-cols-1 xl:grid-cols-2 gap-md mb-md">
+        <div class="bg-surface-container rounded-xl border border-outline-variant/40 p-md">
+          <h3 class="font-label-caps text-[10px] uppercase tracking-widest text-on-surface-variant mb-sm">
+            Webhook deliveries today</h3>
+          <div class="flex items-baseline gap-xs mb-xs">
+            <span class="font-data-mono text-[32px] font-bold ${barText(used)}">${num(quota.todayTotal)}</span>
+            <span class="font-data-mono text-[13px] text-on-surface-variant">/ ${num(DELIVERY_CEILING)}</span>
+          </div>
+          <div class="h-2 rounded-full bg-surface-container-highest overflow-hidden">
+            <div class="h-full ${barFill(used)}" style="width:${Math.min(100, used * 100).toFixed(1)}%"></div>
+          </div>
+          <p class="text-[11px] text-on-surface-variant/60 mt-xs">Gold at 70%, red at 90%. Resets at midnight UTC.</p>
+          ${sparkline(quota.days)}
+        </div>
+
+        <div class="bg-surface-container rounded-xl border border-outline-variant/40 p-md">
+          <h3 class="font-label-caps text-[10px] uppercase tracking-widest text-on-surface-variant mb-sm">Queues</h3>
+          <table class="dense w-full font-data-mono text-[12px]">
+            <thead><tr>
+              <th class="text-left font-label-caps text-[10px] uppercase tracking-widest text-on-surface-variant">Queue</th>
+              ${QUEUE_STATES.map((state) => `
+                <th class="text-right font-label-caps text-[10px] uppercase tracking-widest
+                    text-on-surface-variant">${state}</th>`).join('')}
+            </tr></thead>
+            <tbody>${Object.entries(health.queues).map(([name, jobs]) => `
+              <tr>
+                <td class="text-left text-on-surface">${escapeHtml(name)}</td>
+                ${QUEUE_STATES.map((state) => `
+                  <td class="text-right ${state === 'failed' && (jobs[state] ?? 0) > 0
+                    ? 'text-error font-bold'
+                    : 'text-on-surface-variant'}">${num(jobs[state] ?? 0)}</td>`).join('')}
+              </tr>`).join('')}</tbody>
+          </table>
+          <p class="text-[11px] text-on-surface-variant/60 mt-sm">
+            Fuzzy matching is ${health.catalogFuzzy
+              ? '<span class="text-win">on</span>'
+              : '<span class="text-error">off</span>'}
+            · ${health.games.map((game) => escapeHtml(game)).join(' · ')}</p>
+        </div>
+      </section>
+
+      <section class="bg-surface-container rounded-xl border border-outline-variant/40 overflow-hidden">
+        <h3 class="font-label-caps text-[10px] uppercase tracking-widest text-on-surface-variant p-md pb-sm">
+          Live sessions</h3>
+        <table class="dense w-full font-data-mono text-[12px]">
+          <thead><tr>
+            ${['Channel', 'Game', 'Phase'].map((h) => `
+              <th class="text-left font-label-caps text-[10px] uppercase tracking-widest
+                  text-on-surface-variant">${h}</th>`).join('')}
+            <th class="text-right font-label-caps text-[10px] uppercase tracking-widest text-on-surface-variant">Subs</th>
+            <th class="text-right"></th>
+          </tr></thead>
+          <tbody>${live.length === 0
+            ? '<tr><td colspan="5" class="text-center text-on-surface-variant py-lg">Nothing is live right now.</td></tr>'
+            : live.map((c) => `
+              <tr>
+                <td class="text-left text-on-surface">${escapeHtml(c.slug)}</td>
+                <td class="text-left">${escapeHtml(c.activeSession.gameId)}</td>
+                <td class="text-left text-primary">${escapeHtml(c.activeSession.phase ?? '—')}</td>
+                <td class="text-right">${num(c.liveSubscriptions)}</td>
+                <td class="text-right">
+                  <button data-end="${c.activeSession.id}"
+                          class="text-error/70 hover:text-error font-label-caps text-[10px] uppercase tracking-widest">
+                    Force end</button></td>
+              </tr>`).join('')}</tbody>
+        </table>
+      </section>
+
+      <p class="text-on-surface-variant/50 text-[11px] mt-sm">
+        §7.3's error log is not here — nothing on the API exposes recent errors yet, and a panel that
+        showed none would read as "no errors". Until it exists, the worker's log is the source of truth.</p>`
+
+    $('#reconcile').addEventListener('click', () =>
+      attempt(() => api('/api/admin/reconcile', { method: 'POST' }), { success: 'Reconcile queued' }))
+    for (const button of $$('[data-end]')) {
+      button.addEventListener('click', () => forceEnd(button.dataset.end))
+    }
+  }
+
+  await render()
+  // Failures are swallowed on the interval on purpose: a blip should not
+  // replace a working screen with an error, and the next tick is ten seconds away.
+  poll = setInterval(() => {
+    if (current === 'health') render().catch(() => {})
+  }, 10_000)
+}
+
+const QUEUE_STATES = ['waiting', 'active', 'delayed', 'completed', 'failed']
+
+const tile = (label, value, colour) => `
+  <div class="bg-surface-container rounded-xl border border-outline-variant/40 p-sm">
+    <p class="font-label-caps text-[10px] uppercase tracking-widest text-on-surface-variant">${label}</p>
+    <p class="font-data-mono text-[26px] font-bold ${colour} mt-base">${value}</p>
+  </div>`
+
+// §7.3 — "a bar that turns --gold at 70% and --loss at 90%".
+const barText = (used) => (used >= 0.9 ? 'text-loss' : used >= 0.7 ? 'text-gold' : 'text-on-surface')
+const barFill = (used) => (used >= 0.9 ? 'bg-loss' : used >= 0.7 ? 'bg-gold' : 'bg-primary')
+
+/** Fourteen days of deliveries, summed across channels. */
+function sparkline(rows) {
+  const byDay = new Map()
+  for (const row of rows) byDay.set(row.day, (byDay.get(row.day) ?? 0) + Number(row.deliveries ?? 0))
+  const days = [...byDay.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+
+  if (days.length === 0) {
+    return '<p class="text-on-surface-variant/50 text-[11px] mt-md">No deliveries recorded yet.</p>'
+  }
+
+  const peak = Math.max(...days.map(([, n]) => n), 1)
+  return `
+    <div class="flex items-end gap-[3px] h-16 mt-md">
+      ${days.map(([day, n]) => `
+        <div class="flex-1 bg-primary/40 hover:bg-primary rounded-t transition-colors"
+             style="height:${Math.max(2, (n / peak) * 100).toFixed(1)}%"
+             title="${escapeHtml(day)} — ${n.toLocaleString('en-US')}"></div>`).join('')}
+    </div>
+    <div class="flex justify-between font-data-mono text-[10px] text-on-surface-variant/50 mt-1">
+      <span>${escapeHtml(days[0][0])}</span>
+      <span>peak ${peak.toLocaleString('en-US')}</span>
+      <span>${escapeHtml(days[days.length - 1][0])}</span>
+    </div>`
+}
+
+async function forceEnd(sessionId) {
+  const ok = await confirmAction({
+    title: 'Force-end this session?',
+    body: 'It settles as abandoned. Whatever the streamer had in progress is gone.',
+    confirmLabel: 'Force end',
+    destructive: true,
+  })
+  if (!ok) return
+  await attempt(() => api(`/api/admin/sessions/${sessionId}/end`, { method: 'POST' }), { success: 'End queued' })
+  show(current)
+}
+
+// ─── §7.4 channels ──────────────────────────────────────────────────────────
+
+async function channelsView() {
+  const { channels } = await api('/api/admin/channels')
+  badge('channels', String(channels.length))
+
+  // §7.4 sorts the operationally important rows to the top. A channel holding
+  // live subscriptions with no session is spending quota on nothing.
+  const rows = [...channels].sort((a, b) =>
+    Number(b.leaking) - Number(a.leaking) ||
+    Number(Boolean(b.activeSession)) - Number(Boolean(a.activeSession)) ||
+    a.slug.localeCompare(b.slug))
+
+  const leaking = rows.filter((c) => c.leaking).length
+
+  $('#view').innerHTML = `
+    <header class="mb-md">
+      <h2 class="font-headline-md text-headline-md">Channels</h2>
+      <p class="text-on-surface-variant text-[14px] mt-base">
+        ${channels.length} connected · ${leaking === 0
+          ? 'no subscription leaks'
+          : `<span class="text-error font-bold">${leaking} leaking</span>`}</p>
+    </header>
+
+    ${leaking > 0 ? `
+      <div class="border border-error/40 bg-error/5 rounded-xl p-md mb-md flex items-start gap-sm">
+        <span class="material-symbols-outlined text-error">warning</span>
+        <div>
+          <p class="font-bold text-error">Subscriptions with no session behind them</p>
+          <p class="text-on-surface-variant text-[13px] mt-base">
+            Every event these deliver counts against the daily ceiling and lands nowhere.
+            Reconcile from the Health tab clears them.</p>
+        </div>
+      </div>` : ''}
+
+    <div class="bg-surface-container rounded-xl border border-outline-variant/40 overflow-hidden">
+      <table class="dense w-full font-data-mono text-[12px]">
+        <thead><tr>
+          ${['Channel', 'Broadcaster id', 'Session', 'Phase'].map((h) => `
+            <th class="text-left font-label-caps text-[10px] uppercase tracking-widest
+                text-on-surface-variant">${h}</th>`).join('')}
+          ${['Subs', 'State', ''].map((h) => `
+            <th class="text-right font-label-caps text-[10px] uppercase tracking-widest
+                text-on-surface-variant">${h}</th>`).join('')}
+        </tr></thead>
+        <tbody>${rows.length === 0
+          ? '<tr><td colspan="7" class="text-center text-on-surface-variant py-xl">No channels connected yet.</td></tr>'
+          : rows.map((c) => `
+            <tr>
+              <td class="text-left font-sans font-medium text-[13px] text-on-surface">
+                <a href="https://kick.com/${encodeURIComponent(c.slug)}" target="_blank" rel="noreferrer"
+                   class="hover:text-primary">${escapeHtml(c.slug)}</a></td>
+              <td class="text-left text-on-surface-variant/60">${escapeHtml(c.broadcasterUserId ?? '—')}</td>
+              <td class="text-left">${c.activeSession
+                ? escapeHtml(c.activeSession.gameId)
+                : '<span class="text-on-surface-variant/40">idle</span>'}</td>
+              <td class="text-left text-primary">${c.activeSession ? escapeHtml(c.activeSession.phase ?? '—') : ''}</td>
+              <td class="text-right">${num(c.liveSubscriptions)}</td>
+              <td class="text-right">${c.leaking
+                ? '<span class="text-loss font-bold">leaking</span>'
+                : c.activeSession
+                  ? '<span class="text-win">live</span>'
+                  : '<span class="text-on-surface-variant/40">ok</span>'}</td>
+              <td class="text-right">${c.activeSession
+                ? `<button data-end="${c.activeSession.id}"
+                     class="text-error/70 hover:text-error font-label-caps text-[10px] uppercase tracking-widest">
+                     Force end</button>`
+                : ''}</td>
+            </tr>`).join('')}</tbody>
+      </table>
+    </div>
+
+    <p class="text-on-surface-variant/50 text-[11px] mt-sm">
+      §7.4 also asks for follower count, connection date, sessions run and token status.
+      <span class="font-data-mono">/api/admin/channels</span> carries none of those yet, so the columns are
+      left out rather than faked.</p>`
+
+  for (const button of $$('[data-end]')) {
+    button.addEventListener('click', () => forceEnd(button.dataset.end))
+  }
+}
+
+// ─── go ─────────────────────────────────────────────────────────────────────
+
+renderNav()
+await show(current)
+</script>
+</body>
+</html>

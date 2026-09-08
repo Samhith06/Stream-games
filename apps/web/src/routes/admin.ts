@@ -9,7 +9,7 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import type { WebContext } from '../context.js'
-import { requireAdmin } from '../plugins/session.js'
+import { NotFoundError, requireAdmin } from '../plugins/session.js'
 
 export async function registerAdminRoutes(app: FastifyInstance, ctx: WebContext) {
   app.get('/api/admin/slots', async (req) => {
@@ -18,7 +18,34 @@ export async function registerAdminRoutes(app: FastifyInstance, ctx: WebContext)
     const slots = query.q
       ? await ctx.repos.slots.search(query.q, Number(query.limit ?? 100))
       : await ctx.repos.slots.list(Number(query.limit ?? 100), Number(query.offset ?? 0))
-    return { slots }
+
+    // §7.1 sorts this table on "times requested", so the counts travel with the
+    // rows — the table cannot rank what it was not sent.
+    const stats = await ctx.repos.aliases.statsFor(slots.map((slot) => slot.id))
+
+    return {
+      slots: slots.map((slot) => ({
+        ...slot,
+        aliasCount: stats.get(slot.id)?.aliases ?? 0,
+        requestCount: stats.get(slot.id)?.requests ?? 0,
+      })),
+    }
+  })
+
+  /** Add one alias to a slot that already exists — the edit drawer's alias list. */
+  app.post('/api/admin/slots/:id/aliases', async (req) => {
+    await requireAdmin(ctx, req)
+    const { id } = req.params as { id: string }
+    const { alias } = z.object({ alias: z.string().min(1).max(60) }).parse(req.body)
+
+    const slot = await ctx.repos.slots.byId(id)
+    if (!slot) throw new NotFoundError('Slot not found')
+
+    // ensure(), not learn(): typing an alias here is a curation, not a viewer
+    // asking for the slot, and must not inflate the stats §21 ranks on.
+    await ctx.repos.aliases.ensure({ slotId: id, alias })
+    ctx.catalog.invalidate()
+    return { ok: true }
   })
 
   app.post('/api/admin/slots', async (req) => {
@@ -30,6 +57,11 @@ export async function registerAdminRoutes(app: FastifyInstance, ctx: WebContext)
         rtp: z.number().min(0).max(100).nullish(),
         maxWin: z.number().int().min(0).nullish(),
         volatility: z.enum(['low', 'medium', 'high', 'very-high']).nullish(),
+        // Team Battles' join guard (§10) reads both of these, and null means
+        // unknown rather than false — so the schema has to keep the three
+        // states apart that a checkbox would collapse into two.
+        buyCostX: z.number().min(0).nullish(),
+        hasBonusBuy: z.boolean().nullish(),
         thumbnail: z.string().url().nullish(),
         aliases: z.array(z.string().min(1).max(60)).optional(),
       })
@@ -41,6 +73,9 @@ export async function registerAdminRoutes(app: FastifyInstance, ctx: WebContext)
       rtp: body.rtp === null || body.rtp === undefined ? null : String(body.rtp),
       maxWin: body.maxWin ?? null,
       volatility: body.volatility ?? null,
+      buyCostX:
+        body.buyCostX === null || body.buyCostX === undefined ? null : String(body.buyCostX),
+      hasBonusBuy: body.hasBonusBuy ?? null,
       thumbnail: body.thumbnail ?? null,
     })
 
@@ -62,6 +97,8 @@ export async function registerAdminRoutes(app: FastifyInstance, ctx: WebContext)
         rtp: z.number().min(0).max(100).nullish(),
         maxWin: z.number().int().min(0).nullish(),
         volatility: z.string().nullish(),
+        buyCostX: z.number().min(0).nullish(),
+        hasBonusBuy: z.boolean().nullish(),
         thumbnail: z.string().url().nullish(),
       })
       .parse(req.body)
@@ -72,6 +109,10 @@ export async function registerAdminRoutes(app: FastifyInstance, ctx: WebContext)
       ...(body.rtp !== undefined ? { rtp: body.rtp === null ? null : String(body.rtp) } : {}),
       ...(body.maxWin !== undefined ? { maxWin: body.maxWin ?? null } : {}),
       ...(body.volatility !== undefined ? { volatility: body.volatility ?? null } : {}),
+      ...(body.buyCostX !== undefined
+        ? { buyCostX: body.buyCostX === null ? null : String(body.buyCostX) }
+        : {}),
+      ...(body.hasBonusBuy !== undefined ? { hasBonusBuy: body.hasBonusBuy ?? null } : {}),
       ...(body.thumbnail !== undefined ? { thumbnail: body.thumbnail ?? null } : {}),
     } as never)
 
@@ -116,6 +157,80 @@ export async function registerAdminRoutes(app: FastifyInstance, ctx: WebContext)
     await requireAdmin(ctx, req)
     const { id } = req.params as { id: string }
     await ctx.repos.aliases.reject(id)
+    ctx.catalog.invalidate()
+    return { ok: true }
+  })
+
+  /**
+   * The alternatives to the match a pending alias was learned against.
+   *
+   * §7.2 wants "up to three fuzzy-match candidates" per item. The bound slot is
+   * always one of them and the page renders it first, so only the others are
+   * fetched here — and only for the item on screen, because the queue is worked
+   * one at a time and running trigram search over fifty rows to show one would
+   * be fifty times the work for the same screen.
+   */
+  app.get('/api/admin/aliases/:id/candidates', async (req) => {
+    await requireAdmin(ctx, req)
+    const { id } = req.params as { id: string }
+    const alias = await ctx.repos.aliases.byId(id)
+    if (!alias) throw new NotFoundError('Alias not found')
+
+    const candidates = await ctx.repos.slots.fuzzy(alias.normalised, 4)
+    return { candidates: candidates.filter((c) => c.slotId !== alias.slotId).slice(0, 2) }
+  })
+
+  /**
+   * §7.2's `S` action — the learned match was wrong, so point the alias at the
+   * slot the operator picked instead.
+   *
+   * The old row is dropped rather than re-pointed: `normalised` is unique per
+   * (alias, slot), so moving it could collide with an alias the target slot
+   * already has, and ensure()'s conflict handling settles that without a
+   * failed request.
+   */
+  app.post('/api/admin/aliases/:id/reassign', async (req) => {
+    await requireAdmin(ctx, req)
+    const { id } = req.params as { id: string }
+    const { slotId } = z.object({ slotId: z.string().uuid() }).parse(req.body)
+
+    const alias = await ctx.repos.aliases.byId(id)
+    if (!alias) throw new NotFoundError('Alias not found')
+    const slot = await ctx.repos.slots.byId(slotId)
+    if (!slot) throw new NotFoundError('Slot not found')
+
+    await ctx.repos.aliases.reject(id)
+    await ctx.repos.aliases.ensure({ slotId, alias: alias.alias })
+    ctx.catalog.invalidate()
+    return { ok: true, slot: { id: slot.id, name: slot.name } }
+  })
+
+  /**
+   * Undo. §7.2 keeps one in a toast for eight seconds "because this screen is
+   * worked fast and mistakes are certain", and every action on it either
+   * deletes a row or approves one — neither of which the client can walk back
+   * on its own.
+   */
+  app.post('/api/admin/aliases/reinstate', async (req) => {
+    await requireAdmin(ctx, req)
+    const body = z
+      .object({
+        slotId: z.string().uuid(),
+        alias: z.string().min(1).max(60),
+        hitCount: z.number().int().min(0).optional(),
+        weight: z.number().min(0).max(1).optional(),
+        /** Set when undoing an approve: the row still exists and must go first. */
+        replaces: z.string().uuid().optional(),
+      })
+      .parse(req.body)
+
+    if (body.replaces) await ctx.repos.aliases.reject(body.replaces)
+    await ctx.repos.aliases.reinstate({
+      slotId: body.slotId,
+      alias: body.alias,
+      hitCount: body.hitCount,
+      weight: body.weight,
+    })
     ctx.catalog.invalidate()
     return { ok: true }
   })

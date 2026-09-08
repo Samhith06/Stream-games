@@ -6,7 +6,7 @@
  * added later without the catalog interface changing.
  */
 
-import { and, desc, eq, isNull, or, sql } from 'drizzle-orm'
+import { and, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm'
 import type { Database } from '../client.js'
 import { slotAliases, slots } from '../schema.js'
 import type { SlotAliasRow, SlotRow } from '../schema.js'
@@ -142,6 +142,8 @@ export class SlotRepository {
     rtp?: string | null
     maxWin?: number | null
     volatility?: string | null
+    buyCostX?: string | null
+    hasBonusBuy?: boolean | null
     thumbnail?: string | null
     isCustom?: boolean
   }): Promise<SlotRow> {
@@ -158,6 +160,8 @@ export class SlotRepository {
         rtp: input.rtp ?? null,
         maxWin: input.maxWin ?? null,
         volatility: input.volatility ?? null,
+        buyCostX: input.buyCostX ?? null,
+        hasBonusBuy: input.hasBonusBuy ?? null,
         thumbnail: input.thumbnail ?? null,
         isCustom: input.isCustom ?? false,
       })
@@ -264,6 +268,72 @@ export class AliasRepository {
 
   async reject(id: string): Promise<void> {
     await this.db.delete(slotAliases).where(eq(slotAliases.id, id))
+  }
+
+  async byId(id: string): Promise<SlotAliasRow | null> {
+    const [row] = await this.db.select().from(slotAliases).where(eq(slotAliases.id, id)).limit(1)
+    return row ?? null
+  }
+
+  /**
+   * Puts a rejected alias back, exactly as it was — the undo behind the review
+   * queue's toast (§7.2, "mistakes are certain").
+   *
+   * Distinct from learn() and ensure() because both of those decide the stats
+   * for you: learn() resets a restored row to one hit, ensure() marks it
+   * approved. An undo has to be a no-op end to end, so hitCount and weight are
+   * carried back in rather than recomputed, and `approved` stays false so the
+   * row returns to the queue instead of quietly going live.
+   */
+  async reinstate(input: {
+    slotId: string
+    alias: string
+    hitCount?: number
+    weight?: number
+  }): Promise<void> {
+    const normalised = normaliseSlotName(input.alias)
+    if (normalised === '') return
+    await this.db
+      .insert(slotAliases)
+      .values({
+        slotId: input.slotId,
+        alias: input.alias.trim(),
+        normalised,
+        source: 'learned',
+        approved: false,
+        hitCount: input.hitCount ?? 1,
+        weight: input.weight ?? 1,
+      })
+      .onConflictDoNothing({ target: [slotAliases.normalised, slotAliases.slotId] })
+  }
+
+  /**
+   * Alias count and all-time request count, per slot — the two columns §7.1
+   * says the catalog table is worked by.
+   *
+   * Takes the whole page of ids at once because the alternative is a query per
+   * row, and the admin table shows a hundred at a time.
+   */
+  async statsFor(
+    slotIds: readonly string[],
+  ): Promise<Map<string, { aliases: number; requests: number }>> {
+    const stats = new Map<string, { aliases: number; requests: number }>()
+    if (slotIds.length === 0) return stats
+
+    const rows = await this.db
+      .select({
+        slotId: slotAliases.slotId,
+        aliases: sql<number>`COUNT(*)::int`,
+        requests: sql<number>`COALESCE(SUM(${slotAliases.hitCount}), 0)::int`,
+      })
+      .from(slotAliases)
+      .where(inArray(slotAliases.slotId, [...slotIds]))
+      .groupBy(slotAliases.slotId)
+
+    for (const row of rows) {
+      stats.set(row.slotId, { aliases: Number(row.aliases), requests: Number(row.requests) })
+    }
+    return stats
   }
 
   async forSlot(slotId: string): Promise<SlotAliasRow[]> {
