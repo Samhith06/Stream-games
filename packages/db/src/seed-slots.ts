@@ -42,6 +42,13 @@ const GAMES_GLOBAL = 'Games Global'
 const YGGDRASIL = 'Yggdrasil'
 const QUICKSPIN = 'Quickspin'
 const EVOLUTION = 'Evolution'
+/**
+ * Not a provider slot.report knows. Their data has no "Shady Lady" label at
+ * all — the studio's games are either absent or filed under whichever large
+ * studio the tagger assumed, which is why these are seeded by hand and why
+ * PROVIDER_FIXES in import-slots.ts exists for the ones that did get in.
+ */
+const SHADY_LADY = 'Shady Lady'
 
 export const SEED_SLOTS: SeedSlot[] = [
   // ── Pragmatic Play ────────────────────────────────────────────────────────
@@ -287,4 +294,32 @@ export const SEED_SLOTS: SeedSlot[] = [
   { name: 'Lightning Roulette', provider: EVOLUTION, aliases: ['lightning'] },
   { name: 'Funky Time', provider: EVOLUTION, aliases: ['funky'] },
   { name: 'Sweet Bonanza CandyLand', provider: EVOLUTION, aliases: ['candyland'] },
+
+  /*
+   * ── Shady Lady ────────────────────────────────────────────────────────────
+   *
+   * Seeded rather than imported, because the upstream catalog does not carry
+   * the studio: ten of their titles are missing outright and the other seven
+   * are filed under Pragmatic, Nolimit or Thunderkick. These ten are the
+   * missing ones — verified against shadylady.io, so the spellings are the
+   * studio's own.
+   *
+   * Short, blunt, single-word names, which is the studio's whole thing. Most
+   * need no alias: the resolver already handles case and punctuation, and
+   * "Sew" or "Oops" has nothing left to abbreviate. The aliases below are only
+   * for what a name match genuinely misses — a phonetic spelling, half of a
+   * two-word title, or the apostrophe that normalises to a different key.
+   */
+  { name: 'Swoll', provider: SHADY_LADY, aliases: ['swol', 'swole'] },
+  { name: 'Nuukd', provider: SHADY_LADY, aliases: ['nuked'] },
+  { name: 'Pissed', provider: SHADY_LADY, aliases: [] },
+  { name: 'Sew', provider: SHADY_LADY, aliases: [] },
+  { name: 'Oops', provider: SHADY_LADY, aliases: [] },
+  { name: 'Brainwashed', provider: SHADY_LADY, aliases: ['brainwash'] },
+  { name: 'Trap Tower', provider: SHADY_LADY, aliases: ['trap'] },
+  { name: 'Orphan Organ', provider: SHADY_LADY, aliases: ['orphan', 'organ'] },
+  { name: 'Office Party', provider: SHADY_LADY, aliases: ['office'] },
+  // "Devil's Finger" normalises to "devil s finger", a different key from the
+  // studio's own spelling — so the apostrophe version has to be an alias.
+  { name: 'Devils Finger', provider: SHADY_LADY, aliases: ["Devil's Finger"] },
 ]
