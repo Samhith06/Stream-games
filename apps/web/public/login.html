@@ -41,9 +41,31 @@
         <span class="z-10 relative">Continue with Kick</span>
       </a>
 
-      <div class="mt-md px-sm">
+      <div class="mt-md px-sm space-y-sm">
         <p class="font-body-md text-[13px] leading-relaxed text-on-surface-variant/70">
           We'll ask for permission to read your chat and post messages. You can revoke access anytime.
+        </p>
+        <!--
+          Attribution, and a licence condition rather than a courtesy.
+
+          slot.report supply the ~6,400-slot catalog free, and as of 2026-09-04
+          their terms ask for an *editorial* dofollow link: running text, in the
+          body of a page, with a sentence either side of it. Footer, sidebar and
+          link-list placements explicitly no longer qualify, which is why this
+          moved out of the footer and into a paragraph that says something.
+
+          So: keep it a sentence. Stripping the prose around the link, or moving
+          it back down to the footer with the Terms and Privacy links, breaks
+          the licence as surely as deleting it — and the failure is silent, the
+          key just lapses. No rel="nofollow", which is what dofollow means.
+          See packages/db/src/import-slots.ts.
+        -->
+        <p class="font-body-md text-[13px] leading-relaxed text-on-surface-variant/70">
+          When chat types a slot name, we match it against a catalog of around 6,400 games from
+          <a class="text-on-surface-variant underline underline-offset-2 hover:text-primary transition-colors"
+             href="https://slot.report">slot.report</a>, which is where the RTP, volatility and
+          bonus-buy figures on your board come from. That's what lets a viewer name a slot in full
+          and have it resolve, whether or not anyone has curated it.
         </p>
       </div>
     </div>
@@ -51,17 +73,12 @@
     <footer class="mt-xl flex items-center justify-center gap-sm font-data-mono text-data-mono text-on-surface-variant/50">
       <a class="hover:text-primary transition-colors" href="#">Terms</a><span>·</span>
       <a class="hover:text-primary transition-colors" href="#">Privacy</a><span>·</span>
-      <a class="hover:text-primary transition-colors" href="#">Docs</a><span>·</span>
+      <a class="hover:text-primary transition-colors" href="#">Docs</a>
       <!--
-        Attribution, and a licence condition rather than a courtesy. slot.report
-        supply the ~6,000-slot catalog free "with an active dofollow link", and
-        this is that link — plain, no rel="nofollow", which is what dofollow
-        means. Remove it and the API key lapses and the import is no longer
-        licensed; the curated seed keeps working, the breadth does not.
-        See packages/db/src/import-slots.ts.
+        The slot.report attribution used to sit here. It now lives in the body
+        copy above, because a link in a footer list stopped satisfying their
+        terms — do not move it back down here.
       -->
-      <a class="hover:text-primary transition-colors" href="https://slot.report"
-         title="Slot data by slot.report">Slot data by slot.report</a>
     </footer>
   </main>
 
