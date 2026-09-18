@@ -41,7 +41,16 @@ const PAGES = [
 const MODULES = ['bingo-view.js', 'battles-view.js']
 
 function moduleBody(file: string): string {
-  const source = readFileSync(join(PUBLIC_DIR, file), 'utf8')
+  /*
+   * CRLF is normalised away, and that is load-bearing rather than tidy. The
+   * patterns below anchor on "\n}" to find where a function ends, which a
+   * checkout with CRLF line endings never matches — so on a Windows working
+   * copy with core.autocrlf=true, wireLocals() found nothing, every guard here
+   * passed vacuously, and the whole file reported green while policing
+   * nothing. It only bites on the machine the code is written on, which is the
+   * worst place for a guard to be asleep.
+   */
+  const source = readFileSync(join(PUBLIC_DIR, file), 'utf8').replace(/\r\n/g, '\n')
   if (!file.endsWith('.html')) return source
 
   const match = source.match(/<script type="module">([\s\S]*?)<\/script>/)
@@ -120,10 +129,19 @@ test('no top-level function calls a helper that only exists inside wire()', () =
   for (const [name, source] of topLevelFunctions(body)) {
     if (name === 'wire') continue
     const called = new Set([...source.matchAll(/\b([A-Za-z_$][\w$]*)\s*\(/g)].map((m) => m[1]!))
+    /*
+     * Names this function declares for itself. wireGiveaways() keeps its own
+     * one-line `const on`, a click-only variant of wire()'s — same name, its
+     * own binding, perfectly legal. Without this the guard reads that as
+     * reaching into wire() and fails on working code, which is the way a guard
+     * gets deleted rather than fixed.
+     */
+    const own = new Set([...source.matchAll(/(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/g)].map((m) => m[1]!))
+
     for (const call of called) {
       // Declared inside wire() and not shadowed at module scope: reaching it
       // from out here throws the moment the handler runs.
-      if (locals.has(call) && !scope.has(call)) {
+      if (locals.has(call) && !scope.has(call) && !own.has(call)) {
         violations.push(`${name}() calls ${call}(), which is local to wire()`)
       }
     }
