@@ -800,6 +800,8 @@ function battlesFields() {
       { note: 'Bounded both ways on purpose. A floor alone invites the opposite exploit — entering the most expensive buy available so you cost the streamer the most. With a range, per-pick exposure is known before the session starts, which is what makes the estimate honest.' },
       { k: 'allowUnknownBuyCost', label: 'Allow slots with no buy price on file', type: 'toggle',
         hint: 'On by default. Most of the catalog has no buy data yet, so turning this off will reject almost every entry unless you have curated your own list.' },
+      { k: 'requireBonusBuy', label: 'Bonus buys only', type: 'toggle',
+        hint: 'Off by default. On, a slot the catalog says has no bonus buy is turned away at !join — about half the catalog, so only switch it on for a session that really is buys-only. Slots we have no buy information for are still allowed either way.' },
     ]},
 
     { title: 'Overlay & awards', icon: 'tv', rows: [

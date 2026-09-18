@@ -257,6 +257,21 @@ export const battlesConfigSchema = z
      * is thin. A streamer who has curated their own list can turn it off.
      */
     allowUnknownBuyCost: z.boolean().default(true),
+    /**
+     * Whether a slot the catalog says has no bonus buy is refused at !join.
+     *
+     * Off by default, and the default matters more than it looks: the imported
+     * catalog marks roughly half its titles as having no buy, so turning this
+     * on unasked would refuse thousands of slots — including well-known
+     * Pragmatic ones — in a session the streamer never said was buys-only. Off,
+     * a base-game battle plays as it always has.
+     *
+     * On, it is a real curation rule for a buys-only session, and it refuses
+     * only what the catalog positively says has no buy. Unknown still passes,
+     * for the same reason `allowUnknownBuyCost` defaults to allowing it: the
+     * catalog's silence is not evidence.
+     */
+    requireBonusBuy: z.boolean().default(false),
 
     /** §9.2 — bounded and automatic, so it can't become a discretionary extension. */
     suddenDeathThreshold: z.number().min(0).max(0.5).default(0.05),

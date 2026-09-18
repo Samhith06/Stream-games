@@ -537,8 +537,13 @@ export function curationVerdict(
     return { ok: false, reason: `${match.provider} isn't available on this casino — pick another slot.` }
   }
 
-  // Established fact, not an assumption: only `false` blocks, never null.
-  if (match.hasBonusBuy === false) {
+  /*
+   * Only a buys-only session refuses these, and only on an established fact —
+   * `false`, never null. Half the imported catalog carries a false here, so
+   * ungated this would refuse thousands of perfectly good slots in a session
+   * that never asked for buys.
+   */
+  if (config.requireBonusBuy && match.hasBonusBuy === false) {
     return { ok: false, reason: `${match.name} has no bonus buy — pick a slot with one.` }
   }
 

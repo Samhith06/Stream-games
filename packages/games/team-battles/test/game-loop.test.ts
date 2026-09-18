@@ -446,12 +446,28 @@ test('an unknown buy cost is allowed by default and refused when strict', () => 
   assert.equal(strict.state.pool.length, 0)
 })
 
-test('a slot known to have no buy is refused; an unknown one is not', () => {
-  const noBuy = run([joinCmd('ana', 'Flat'), resolvedFor('ana', 'f', 'Flat', { hasBonusBuy: false })])
+test('a slot known to have no buy is refused only in a buys-only session', () => {
+  const buysOnly = { requireBonusBuy: true }
+
+  const noBuy = run(
+    [joinCmd('ana', 'Flat'), resolvedFor('ana', 'f', 'Flat', { hasBonusBuy: false })],
+    buysOnly,
+  )
   assert.equal(noBuy.state.pool.length, 0)
 
-  const unknown = run([joinCmd('ben', 'Maybe'), resolvedFor('ben', 'mb', 'Maybe', { hasBonusBuy: null })])
+  const unknown = run(
+    [joinCmd('ben', 'Maybe'), resolvedFor('ben', 'mb', 'Maybe', { hasBonusBuy: null })],
+    buysOnly,
+  )
   assert.equal(unknown.state.pool.length, 1, 'null is unknown, not false')
+})
+
+test('a slot with no buy joins a normal session', () => {
+  // The default, and the one that matters: the imported catalog marks about
+  // half its titles as having no buy, so a base-game battle that refused them
+  // would turn most of chat's picks away for a rule nobody set.
+  const { state } = run([joinCmd('ana', 'Flat'), resolvedFor('ana', 'f', 'Flat', { hasBonusBuy: false })])
+  assert.equal(state.pool.length, 1)
 })
 
 test('a blocked provider is refused', () => {
