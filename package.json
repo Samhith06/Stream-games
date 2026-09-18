@@ -29,6 +29,7 @@
     "start:worker": "node --env-file-if-exists=.env apps/worker/dist/index.js",
     "db:migrate": "node --env-file-if-exists=.env scripts/db.mjs migrate",
     "db:seed": "node --env-file-if-exists=.env scripts/db.mjs seed",
+    "db:import-slots": "node --env-file-if-exists=.env scripts/db.mjs import-slots",
     "infra:up": "docker compose up -d",
     "infra:down": "docker compose down",
     "test:smoke": "node --env-file-if-exists=.env scripts/smoke.mjs",
