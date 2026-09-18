@@ -213,7 +213,7 @@ function hunt() {
   <div class="grid grid-cols-1 xl:grid-cols-3 gap-lg">
     <div class="xl:col-span-2 flex flex-col gap-lg">
       ${unresolved()}
-      ${entryTable(phase)}
+      ${phase === 'collecting' ? collectingBoard() : entryTable(phase)}
     </div>
     <div class="flex flex-col gap-lg">
       ${phase === 'collecting' ? manualAdd() : ''}
@@ -271,6 +271,124 @@ function unresolved() {
           </div>
         </div>`).join('')}
     </div>
+  </div>`
+}
+
+/**
+ * Collecting, in two columns: what chat has asked for, and what has landed.
+ *
+ * One mixed list was fine at ten entries and stopped being fine at forty. The
+ * two halves are read at different moments and answer different questions —
+ * "what do I play next" while hunting, "how far in am I" between bonuses — and
+ * a status badge in a long table makes you scan for the answer to both. Split,
+ * each column is countable at a glance, which is what the streamer is doing
+ * with it mid-hunt while also playing.
+ *
+ * Collecting only. Opening reads as a ledger, top to bottom in the order the
+ * bonuses were banked, and splitting it there would be actively worse — so
+ * `entryTable` keeps that phase.
+ */
+function collectingBoard() {
+  const entries = state.entries ?? []
+  // `opened` cannot occur this phase; it sits with collected if it ever does,
+  // since it has certainly been banked.
+  const requested = entries.filter((e) => e.status === 'pending' || e.status === 'queued')
+  const collected = entries.filter((e) => e.status === 'collected' || e.status === 'opened')
+  const target = state.targetBonuses ?? 0
+
+  return `
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-lg items-start">
+    ${huntColumn({
+      title: 'Requested',
+      icon: 'format_list_bulleted',
+      count: `${requested.length}`,
+      accent: 'text-on-surface',
+      rows: requested.map(requestedRow).join(''),
+      empty: `No slots yet. Viewers add them with <span class="font-data-mono text-primary">!sr &lt;slot&gt;</span>`,
+      emptyIcon: 'casino',
+    })}
+    ${huntColumn({
+      title: 'Collected',
+      icon: 'savings',
+      count: target ? `${collected.length} / ${target}` : `${collected.length}`,
+      accent: 'text-primary',
+      border: 'border-primary/30',
+      rows: collected.map(collectedRow).join(''),
+      empty: 'Nothing banked yet. Mark a slot collected when the bonus lands.',
+      emptyIcon: 'hourglass_empty',
+    })}
+  </div>`
+}
+
+function huntColumn({ title, icon, count, accent, border, rows, empty, emptyIcon }) {
+  return `
+  <div class="bg-surface-container rounded-xl border ${border ?? 'border-outline-variant'} overflow-hidden flex flex-col">
+    <div class="p-md border-b ${border ?? 'border-outline-variant'} flex justify-between items-center bg-surface-container-high">
+      <h2 class="font-headline-md text-headline-md font-bold flex items-center gap-sm ${accent}">
+        <span class="material-symbols-outlined">${icon}</span> ${title}
+      </h2>
+      <span class="font-data-mono text-[12px] ${accent}">${count}</span>
+    </div>
+    <div class="overflow-y-auto max-h-[540px] divide-y divide-outline-variant/40">
+      ${rows || `
+        <div class="p-xl text-center text-on-surface-variant">
+          <span class="material-symbols-outlined text-[40px] opacity-40">${emptyIcon}</span>
+          <p class="mt-sm text-sm">${empty}</p>
+        </div>`}
+    </div>
+  </div>`
+}
+
+/** Waiting to be played. The question it answers is "what's next". */
+function requestedRow(e) {
+  const matching = e.status === 'pending'
+
+  return `
+  <div class="p-sm flex items-center gap-sm hover:bg-surface-container-high transition-colors group">
+    ${slotTile(e.slotName, e.thumbnail, 'w-10 h-10 rounded object-cover border border-outline-variant/40 text-[13px] shrink-0')}
+    <div class="min-w-0 flex-1">
+      <div class="font-data-mono text-sm font-bold text-on-surface truncate">${escapeHtml(e.slotName)}</div>
+      <div class="text-[11px] text-on-surface-variant truncate">
+        ${e.provider ? `${escapeHtml(e.provider)} · ` : ''}${escapeHtml(e.requestedBy)}
+      </div>
+    </div>
+    ${matching
+      // The only status worth a badge here: it is the one row the streamer
+      // cannot act on yet, and the unresolved panel above is where it gets
+      // dealt with.
+      ? `<span class="inline-flex items-center gap-1 ${STATUS_BADGE.pending[0]} px-2 py-1 rounded-full text-xs font-bold border shrink-0">
+           <span class="w-2 h-2 rounded-full ${STATUS_BADGE.pending[1]}"></span> ${STATUS_BADGE.pending[2]}
+         </span>`
+      : `<button data-collect="${escapeHtml(e.id)}"
+           class="bg-primary/20 text-primary border border-primary/50 hover:bg-primary hover:text-on-primary
+                  px-2 py-1 rounded text-xs font-bold transition-colors whitespace-nowrap shrink-0">Mark collected</button>`}
+    <button data-remove="${escapeHtml(e.id)}" title="Remove"
+      class="text-on-surface-variant hover:text-error transition-colors shrink-0">
+      <span class="material-symbols-outlined text-[18px]">close</span></button>
+  </div>`
+}
+
+/** Banked. The question it answers is "how far in am I, and at what stake". */
+function collectedRow(e) {
+  return `
+  <div class="p-sm flex items-center gap-sm hover:bg-surface-container-high transition-colors group">
+    ${slotTile(e.slotName, e.thumbnail, 'w-10 h-10 rounded object-cover border border-primary/30 text-[13px] shrink-0')}
+    <div class="min-w-0 flex-1">
+      <div class="font-data-mono text-sm font-bold text-on-surface truncate flex items-center gap-xs">
+        ${escapeHtml(e.slotName)}${bonusBadge(e.bonusType)}
+      </div>
+      <div class="text-[11px] text-on-surface-variant truncate">
+        ${e.provider ? `${escapeHtml(e.provider)} · ` : ''}${escapeHtml(e.requestedBy)}
+      </div>
+    </div>
+    <input data-bet="${escapeHtml(e.id)}" type="number" step="0.01" value="${e.bet ?? 0}" title="Bet"
+           class="input-dark w-20 rounded px-2 py-1 text-sm font-data-mono shrink-0">
+    <button data-uncollect="${escapeHtml(e.id)}" title="Put it back in the queue"
+      class="text-on-surface-variant hover:text-tertiary transition-colors shrink-0">
+      <span class="material-symbols-outlined text-[18px]">undo</span></button>
+    <button data-remove="${escapeHtml(e.id)}" title="Remove"
+      class="text-on-surface-variant hover:text-error transition-colors shrink-0">
+      <span class="material-symbols-outlined text-[18px]">close</span></button>
   </div>`
 }
 
