@@ -213,7 +213,7 @@ function hunt() {
   <div class="grid grid-cols-1 xl:grid-cols-3 gap-lg">
     <div class="xl:col-span-2 flex flex-col gap-lg">
       ${unresolved()}
-      ${phase === 'collecting' ? collectingBoard() : entryTable(phase)}
+      ${phase === 'collecting' ? collectingBoard() : phase === 'opening' ? openingBoard() : entryTable(phase)}
     </div>
     <div class="flex flex-col gap-lg">
       ${phase === 'collecting' ? manualAdd() : ''}
@@ -389,6 +389,97 @@ function collectedRow(e) {
     <button data-remove="${escapeHtml(e.id)}" title="Remove"
       class="text-on-surface-variant hover:text-error transition-colors shrink-0">
       <span class="material-symbols-outlined text-[18px]">close</span></button>
+  </div>`
+}
+
+/**
+ * Opening, in the same two columns: what is left, and what has landed.
+ *
+ * The split falls out of the state machine rather than being imposed on it —
+ * `entry.setWin` with a figure moves an entry to `opened`, and clearing that
+ * figure moves it back — so a row crosses the board as the streamer types, and
+ * crosses back if they mistyped. The left column is the work remaining and
+ * empties as the hunt finishes; the right is the run so far.
+ *
+ * Opening only, not `complete`. Once the last win is in, the left column is
+ * empty by definition and the interesting thing is the whole run in banking
+ * order, which is what `entryTable` already is.
+ */
+function openingBoard() {
+  const entries = state.entries ?? []
+  const toOpen = entries.filter((e) => e.status !== 'opened')
+  const opened = entries.filter((e) => e.status === 'opened')
+
+  return `
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-lg items-start">
+    ${huntColumn({
+      title: 'To open',
+      icon: 'inventory_2',
+      count: `${toOpen.length}`,
+      accent: 'text-on-surface',
+      rows: toOpen.map(toOpenRow).join(''),
+      empty: 'Every bonus is open. Close the hunt to see the result.',
+      emptyIcon: 'done_all',
+    })}
+    ${huntColumn({
+      title: 'Opened',
+      icon: 'emoji_events',
+      count: entries.length ? `${opened.length} / ${entries.length}` : `${opened.length}`,
+      accent: 'text-primary',
+      border: 'border-primary/30',
+      rows: opened.map(openedRow).join(''),
+      empty: 'Nothing opened yet. Enter a win to start the run.',
+      emptyIcon: 'hourglass_empty',
+    })}
+  </div>`
+}
+
+/** Banked, not yet opened. Typing a win here moves it to the other column. */
+function toOpenRow(e) {
+  return `
+  <div class="p-sm flex items-center gap-sm hover:bg-surface-container-high transition-colors group">
+    ${slotTile(e.slotName, e.thumbnail, 'w-10 h-10 rounded object-cover border border-outline-variant/40 text-[13px] shrink-0')}
+    <div class="min-w-0 flex-1">
+      <div class="font-data-mono text-sm font-bold text-on-surface truncate flex items-center gap-xs">
+        ${escapeHtml(e.slotName)}${bonusBadge(e.bonusType)}
+      </div>
+      <div class="text-[11px] text-on-surface-variant truncate">${escapeHtml(e.requestedBy)}</div>
+    </div>
+    <input data-bet="${escapeHtml(e.id)}" type="number" step="0.01" value="${e.bet ?? 0}" title="Bet"
+           class="input-dark w-16 rounded px-2 py-1 text-sm font-data-mono shrink-0">
+    <input data-win="${escapeHtml(e.id)}" type="number" step="0.01" placeholder="win"
+           value="${e.win ?? ''}" title="Win — entering one opens this bonus"
+           class="input-dark w-24 rounded px-2 py-1 text-sm font-data-mono shrink-0">
+    <button data-remove="${escapeHtml(e.id)}" title="Remove"
+      class="text-on-surface-variant hover:text-error transition-colors shrink-0">
+      <span class="material-symbols-outlined text-[18px]">close</span></button>
+  </div>`
+}
+
+/**
+ * Opened. The multiplier is the number being read aloud, so it leads.
+ *
+ * Bet and win both stay editable: a mistyped bet is only ever noticed once the
+ * multiplier it produces looks wrong, which is after the row has moved here.
+ * Clearing the win sends the row back to the left column, which is the undo.
+ */
+function openedRow(e) {
+  return `
+  <div class="p-sm flex items-center gap-sm hover:bg-surface-container-high transition-colors group">
+    ${slotTile(e.slotName, e.thumbnail, 'w-10 h-10 rounded object-cover border border-primary/30 text-[13px] shrink-0')}
+    <div class="min-w-0 flex-1">
+      <div class="font-data-mono text-sm font-bold text-on-surface truncate flex items-center gap-xs">
+        ${escapeHtml(e.slotName)}${bonusBadge(e.bonusType)}
+      </div>
+      <div class="text-[11px] ${e.multiplier >= 100 ? 'text-tertiary font-bold' : 'text-on-surface-variant'}">
+        ${multiplier(e.multiplier)}
+      </div>
+    </div>
+    <input data-bet="${escapeHtml(e.id)}" type="number" step="0.01" value="${e.bet ?? 0}" title="Bet"
+           class="input-dark w-16 rounded px-2 py-1 text-sm font-data-mono shrink-0">
+    <input data-win="${escapeHtml(e.id)}" type="number" step="0.01" placeholder="—" value="${e.win ?? ''}"
+           title="Win — clearing it puts the bonus back"
+           class="input-dark w-24 rounded px-2 py-1 text-sm font-data-mono text-win shrink-0">
   </div>`
 }
 
