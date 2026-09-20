@@ -133,8 +133,20 @@ export async function registerSessionRoutes(app: FastifyInstance, ctx: WebContex
 
     const parsed = game.configSchema.safeParse(body.config)
     if (!parsed.success) {
+      /*
+       * Say which setting is wrong. The setup screen is thirty-odd dials across
+       * five cards, and "check the setup form" against that is a search rather
+       * than a correction — the streamer clicks the button again, gets the same
+       * eight words, and has no more idea than the first time. The schema's own
+       * messages are written to be read by the streamer, so send them.
+       */
+      const messages = parsed.error.issues.map((issue) => issue.message)
       return reply.code(400).send({
-        error: { code: 'invalid_config', message: 'Check the setup form', details: parsed.error.issues },
+        error: {
+          code: 'invalid_config',
+          message: messages.slice(0, 2).join(' ') || 'Check the setup form',
+          details: parsed.error.issues,
+        },
       })
     }
 

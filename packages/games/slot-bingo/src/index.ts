@@ -12,7 +12,7 @@
 
 import type { GameModule, InitContext } from '@streamarena/core'
 import { round2 } from '@streamarena/core'
-import { buildLines, buildSquares, lineCountFor, squareId } from './board.js'
+import { buildLines, buildSquares, lineCountFor, squareId, unlockSchedule } from './board.js'
 import { aliveLines, bestLine, recomputeLines } from './lines.js'
 import { lineLabel, picksUntilNextUnlock, reduce } from './reduce.js'
 import { bingoConfigSchema, type BingoConfig, type BingoState } from './types.js'
@@ -283,5 +283,8 @@ function runningTotals(state: BingoState) {
   }
 }
 
-export { squareId, recomputeLines, lineLabel }
+// `unlockSchedule` is exported for the setup screen's guard: that page cannot
+// import it (served unbundled) and so recomputes it, and the test that holds
+// the two copies together needs the original to compare against.
+export { squareId, recomputeLines, lineLabel, unlockSchedule }
 export * from './types.js'

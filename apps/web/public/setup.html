@@ -81,8 +81,18 @@ const saved = await api(`/api/games/${gameId}/config`)
 const cfg = { ...saved.config }
 const policy = { ...saved.chatPolicy }
 
-const FIELDS =
-  gameId === 'bonus-hunt'
+if (gameId === 'slot-bingo') normaliseBingo()
+
+render()
+
+/*
+ * The field list is rebuilt on every render rather than computed once, because
+ * some of a field's own shape depends on the config: a 3×3 board caps the
+ * squares it can hold back at one and has no free centre at all. Built once,
+ * those bounds would describe whichever board size happened to load first.
+ */
+function fields() {
+  return gameId === 'bonus-hunt'
     ? bonusHuntFields()
     : gameId === 'slot-bingo'
       ? bingoFields()
@@ -91,10 +101,10 @@ const FIELDS =
         : gameId === 'giveaways'
           ? giveawayFields()
           : tournamentFields()
-render()
+}
 
 function render() {
-  $('#fields').innerHTML = FIELDS.map(section).join('')
+  $('#fields').innerHTML = fields().map(section).join('')
   bind()
   summarise()
 }
@@ -115,7 +125,8 @@ function bonusHuntFields() {
         options: [['anyone','Anyone'],['followers','Followers'],['subscribers','Subs'],['moderators','Only me']] },
       { k: 'oneEntryPerViewer', label: 'One slot per viewer for the whole hunt', type: 'toggle',
         hint: 'Off (recommended): a viewer may request again once you have banked or dropped their last slot — better for smaller channels. On: one slot each, whatever happens.' },
-      { k: 'maxEntriesPerViewer', label: 'Slots a viewer may hold at once', type: 'stepper', half: true },
+      { k: 'maxEntriesPerViewer', label: 'Slots a viewer may hold at once', type: 'stepper', half: true,
+        min: 1, max: 10 },
       { k: 'requestCooldownMs', label: 'Cooldown between requests', type: 'seconds', half: true, max: 120 },
     ]},
     { title: 'Guess the Balance', icon: 'psychology', rows: [
@@ -133,13 +144,22 @@ function bingoFields() {
     { title: 'Board', icon: 'grid_on', rows: [
       { k: 'size', label: 'Board size', type: 'segment', options: [[3,'3 × 3'],[5,'5 × 5']] },
       { note: 'A 5×5 is 25 bonus buys and a full-session commitment — the estimate below is what it costs to fill. A 3×3 is nine, and finishes inside an hour.' },
+      // 0 is a real setting, not a floor to be bumped off: some streamers want
+      // the board sealed once the draw runs. A 3×3 has one line through most
+      // squares and no room to hold more than one back — the config schema
+      // refuses more, so the stepper must not offer it.
       { k: 'openSquares', label: 'Squares held back for late joiners', type: 'stepper', half: true,
-        hint: 'They sit visibly empty and unlock spread across the board, each by its own mini-draw. Set to 0 to close the board after the opening window — on a session that runs for hours, that is a locked door to everyone who tunes in late.' },
+        min: 0, max: (cfg.size ?? 5) === 3 ? 1 : 4,
+        hint: 'They sit visibly empty and unlock spread across the board, each by its own mini-draw.' },
+      { live: 'unlocks' },
       { k: 'typicalBuy', label: 'Your typical bonus buy', type: 'money', half: true },
       { k: 'currency', label: 'Currency', type: 'segment', half: true,
         options: [['EUR','EUR'],['USD','USD'],['GBP','GBP']] },
       { k: 'freeCentre', label: 'Free centre square (5×5)', type: 'toggle',
-        hint: 'An automatic green nobody owns. The four lines through the centre then need four greens instead of five, which roughly doubles the odds of an instant bingo — about 5% to about 8%.' },
+        disabled: (cfg.size ?? 5) !== 5,
+        hint: (cfg.size ?? 5) === 5
+          ? 'An automatic green nobody owns. The four lines through the centre then need four greens instead of five, which roughly doubles the odds of an instant bingo — about 5% to about 8%.'
+          : 'A 5×5 option. A 3×3 has one line through the centre in four directions, so a free centre there would hand out half the board.' },
     ]},
 
     { title: 'Scoring', icon: 'analytics', accent: 'secondary', rows: [
@@ -205,6 +225,12 @@ function chatRows() {
 
 // ─── rendering ──────────────────────────────────────────────────────────────
 
+// A declaration, not a const arrow: the steppers are rendered by the first
+// render(), which runs above this line.
+function clamp(n, min, max) {
+  return Math.max(min, Math.min(max, n))
+}
+
 function section(sec) {
   return `
   <section class="card-glass rounded-xl p-lg ${sec.accent === 'secondary' ? 'border-t-2 border-t-secondary/50' : ''}">
@@ -246,7 +272,7 @@ function row(f) {
    * stream delay" is the version of this that does not work.
    */
   if (f.live) {
-    const { tone, text } = delayNote(f.live)
+    const { tone, text } = liveNoteFor(f.live)
     return liveNote(tone, text, `live-${f.live}`)
   }
 
@@ -280,18 +306,29 @@ function row(f) {
           <span class="absolute right-md top-1/2 -translate-y-1/2 font-data-mono text-on-surface-variant">x</span>
         </div>`
       break
-    case 'stepper':
+    /*
+     * The bounds are per field, not shared. Three of the four steppers on this
+     * screen accept 0 as a real setting — no squares held back, no passovers,
+     * no sudden death — and a stepper that stops at 1 makes those settings
+     * unreachable from the only screen that offers them.
+     */
+    case 'stepper': {
+      const min = f.min ?? 0
+      const max = f.max ?? 10
       field = `<div class="flex items-center">
-          <button type="button" data-step="-1" data-k="${f.k}" class="bg-surface-container-low border border-outline-variant
+          <button type="button" data-step="-1" data-k="${f.k}" data-min="${min}" data-max="${max}"
+            class="bg-surface-container-low border border-outline-variant
             hover:border-secondary w-12 h-12 rounded-l flex items-center justify-center">
             <span class="material-symbols-outlined">remove</span></button>
-          <input data-k="${f.k}" data-t="int" readonly value="${value ?? 1}"
+          <input data-k="${f.k}" data-t="int" readonly value="${clamp(value ?? min, min, max)}"
             class="input-dark w-full text-center h-12 rounded-none border-x-0 font-data-mono">
-          <button type="button" data-step="1" data-k="${f.k}" class="bg-surface-container-low border border-outline-variant
+          <button type="button" data-step="1" data-k="${f.k}" data-min="${min}" data-max="${max}"
+            class="bg-surface-container-low border border-outline-variant
             hover:border-secondary w-12 h-12 rounded-r flex items-center justify-center">
             <span class="material-symbols-outlined">add</span></button>
         </div>`
       break
+    }
     case 'seconds':
     case 'minutes': {
       const div = f.type === 'seconds' ? 1000 : 60000
@@ -369,12 +406,21 @@ function row(f) {
           </div>`).join('')}
       </div>`
       break
+    /*
+     * A toggle the current shape of the config makes meaningless is shown
+     * greyed rather than hidden: the streamer learns the option exists and why
+     * it is not on offer here. It is also the only way the screen can refuse a
+     * setting the config schema refuses — a live toggle whose value is rejected
+     * at Open Joining is a trap laid three fields earlier.
+     */
     case 'toggle':
-      return `<div class="${span}">
+      return `<div class="${span} ${f.disabled ? 'opacity-50' : ''}">
         <div class="flex items-center justify-between p-sm bg-surface-container-low rounded-lg border border-outline-variant/50">
           <span class="font-body-md">${escapeHtml(f.label)}</span>
           <button type="button" role="switch" data-k="${f.k}" data-t="toggle" aria-checked="${Boolean(value)}"
+            ${f.disabled ? 'disabled' : ''}
             class="relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors
+                   ${f.disabled ? 'cursor-not-allowed' : ''}
                    ${value ? 'bg-primary' : 'bg-surface-variant'}">
             <span class="pointer-events-none inline-block h-5 w-5 rounded-full bg-surface-container-lowest shadow
                          transition ${value ? 'translate-x-5' : 'translate-x-0'}"></span>
@@ -436,7 +482,44 @@ function prizeRow(prize, index, total) {
 function set(key, value, isPolicy) {
   if (isPolicy) policy[key] = value
   else cfg[key] = value
+
+  /*
+   * A 3×3 is not a smaller 5×5. It has no free centre and holds back at most
+   * one square, and the config schema refuses both — so switching size has to
+   * fold the rest of the board config into shape here. Left alone, a streamer
+   * who set up a 5×5 and then picked 3×3 got a rejected form at Open Joining
+   * naming a field they had never touched.
+   */
+  if (gameId === 'slot-bingo' && key === 'size') {
+    const fixed = normaliseBingo()
+    render()
+    if (fixed.length) toast(`On a 3×3, ${fixed.join(' and ')}.`)
+    return
+  }
+
   summarise()
+}
+
+/**
+ * Folds the bingo config into a shape the schema accepts, returning what it
+ * changed. Runs on the config that loads as well as on every size change: the
+ * setup route fills the form field by field, which cannot see the cross-field
+ * rules, so a saved 5×5 reopened as a 3×3 arrives here already invalid.
+ */
+function normaliseBingo() {
+  const fixed = []
+  if ((cfg.size ?? 5) !== 3) return fixed
+
+  if (cfg.freeCentre) {
+    cfg.freeCentre = false
+    fixed.push('the free centre square is off')
+  }
+  const held = cfg.openSquares ?? 0
+  if (held > 1) {
+    cfg.openSquares = 1
+    fixed.push(`one square is held back instead of ${held}`)
+  }
+  return fixed
 }
 
 function isPolicyKey(k) {
@@ -478,7 +561,8 @@ function bind() {
     btn.addEventListener('click', () => {
       const k = btn.dataset.k
       const input = document.querySelector(`input[data-k="${k}"]`)
-      const next = Math.max(1, Math.min(10, Number(input.value) + Number(btn.dataset.step)))
+      const next = clamp(Number(input.value) + Number(btn.dataset.step),
+                         Number(btn.dataset.min), Number(btn.dataset.max))
       input.value = next
       set(k, next, false)
     })
@@ -569,6 +653,64 @@ function bindPrizes() {
   }
 }
 
+/** Live rows by name. A declaration rather than a map, which would be in its
+ *  temporal dead zone when the first render() reaches it. */
+function liveNoteFor(kind) {
+  return kind === 'unlocks' ? unlockNote() : delayNote(kind)
+}
+
+/**
+ * The picks each held-back square opens after.
+ *
+ * A copy of `unlockSchedule()` in the slot-bingo package, because these pages
+ * are served unbundled and cannot import from it. The numbers promised here and
+ * the schedule the engine commits at the draw have to be the same numbers — a
+ * screen that says "opening after pick 6" and a board that opens at 7 is a
+ * promise broken in front of an audience — so setup-screen.test.ts holds the
+ * two against each other.
+ */
+function unlockPicks(held, expectedPicks) {
+  if (held <= 0) return []
+  return Array.from({ length: held }, (_, i) => Math.round(((i + 1) * expectedPicks) / (held + 1)))
+}
+
+/**
+ * Slot Bingo §5.2, and the reason the stepper's zero needed to be reachable in
+ * the first place: it is a real setting with a real cost, and the streamer
+ * choosing it should read the cost in the same glance.
+ *
+ * The square count subtracts the free centre for the same reason the draw does
+ * (`runDraw`, seats) — a 5×5 with a free centre draws 21 squares at the start,
+ * not 22, and the number on this screen is the one the streamer will count on
+ * the overlay.
+ */
+function unlockNote() {
+  const size = cfg.size ?? 5
+  const squares = size * size
+  const held = clamp(cfg.openSquares ?? 0, 0, squares)
+
+  if (held === 0) {
+    return {
+      tone: 'warn',
+      text: 'No late entry. Anyone who tunes in after the draw can only watch.',
+    }
+  }
+
+  const drawn = squares - held - (cfg.freeCentre && size === 5 ? 1 : 0)
+  const picks = unlockPicks(held, squares)
+  const after =
+    picks.length === 1
+      ? `pick ${picks[0]}`
+      : `picks ${picks.slice(0, -1).join(', ')} and ${picks[picks.length - 1]}`
+
+  return {
+    tone: 'info',
+    text:
+      `${drawn} squares drawn at the start. ${held} held back, ` +
+      `opening after ${after} for viewers who arrive later.`,
+  }
+}
+
 /**
  * Repaint the notes that quote a number the streamer is currently dragging.
  *
@@ -577,13 +719,18 @@ function bindPrizes() {
  * driven from `summarise()`, which already runs on every change.
  */
 function repaintLiveNotes() {
-  if (gameId !== 'giveaways') return
+  const notes =
+    gameId === 'giveaways'
+      ? [
+          ['live-entry', delayNote('entry')],
+          ['live-claim', delayNote('claim')],
+          ['live-gate', gateNote()],
+        ]
+      : gameId === 'slot-bingo'
+        ? [['live-unlocks', unlockNote()]]
+        : []
 
-  for (const [id, next] of [
-    ['live-entry', delayNote('entry')],
-    ['live-claim', delayNote('claim')],
-    ['live-gate', gateNote()],
-  ]) {
+  for (const [id, next] of notes) {
     const el = document.getElementById(id)
     if (!el) continue
     el.outerHTML = liveNote(next.tone, next.text, id)
@@ -608,7 +755,11 @@ function bingoSummary() {
     ['Board', `${size} × ${size} · ${squares} squares · ${lines} lines`],
     ['Full board costs', `≈ ${money(squares * buy, currency)}`],
     ['Green / gold', `${Number(cfg.greenThresholdX ?? 1).toFixed(2)}x / ${cfg.bigWinThresholdX ?? 50}x`],
-    ['Held back', `${cfg.openSquares ?? 0} ${(cfg.openSquares ?? 0) === 1 ? 'square' : 'squares'}`],
+    // §5.2 — 0 is a legitimate setting, and the summary says what it costs
+    // rather than reporting "0 squares" and leaving the consequence unsaid.
+    ['Held back', (cfg.openSquares ?? 0) === 0
+      ? 'None · no late entry'
+      : `${cfg.openSquares} ${cfg.openSquares === 1 ? 'square' : 'squares'}`],
     ['Free centre', cfg.freeCentre ? 'On' : 'Off'],
     ['Who can join', label(cfg.joinGate)],
     ['Opening window', cfg.joinWindowMs === null ? 'Manual close' : `${Math.round(cfg.joinWindowMs / 60000)} minutes`],
@@ -655,7 +806,7 @@ function giveawayFields() {
       { k: 'claimWindowMs', label: 'Claim window', type: 'seconds', max: 600 },
       { live: 'claim' },
       { note: 'The winner types !claim. Their clock starts when the announcement reaches chat, not when the reel stops, so the stream delay is not spent before they can possibly know they won. The floor moves with your delay for the same reason.' },
-      { k: 'maxPassovers', label: 'Passovers allowed', type: 'stepper', half: true,
+      { k: 'maxPassovers', label: 'Passovers allowed', type: 'stepper', half: true, min: 0, max: 10,
         hint: 'How many times an unclaimed prize moves to the next name before it stops and asks you. At a normal claim rate, three settles about 99 prizes in 100 without you having to make a call.' },
       { k: 'allowPreviousWinners', label: 'Let a winner win again', type: 'toggle',
         hint: 'Off by default, which spreads a three-prize session across three people instead of concentrating it in one. On, the top of the committed order takes every prize.' },
@@ -762,7 +913,7 @@ function battlesFields() {
       { k: 'drawMode', label: 'How teams are decided', type: 'segment',
         options: [['coin','Coin flip'],['bag','Balanced bag']] },
       { note: 'Balanced bag guarantees even teams by drawing from a fixed pool of chips. The cost is that the last pick of every session is predetermined — the most dramatic moment on the schedule, with no suspense left in it.' },
-      { k: 'maxSuddenDeath', label: 'Sudden-death picks', type: 'stepper', half: true,
+      { k: 'maxSuddenDeath', label: 'Sudden-death picks', type: 'stepper', half: true, min: 0, max: 10,
         hint: 'If the teams are close when the last scheduled pick lands, extra picks run automatically — up to this many, then the tiebreak decides. Set to 0 to turn it off.' },
       { k: 'typicalBuy', label: 'Your typical buy', type: 'money', half: true,
         hint: 'Not a game rule — it is what the projected spend is calculated from.' },
