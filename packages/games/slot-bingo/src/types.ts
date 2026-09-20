@@ -1,11 +1,11 @@
 /**
  * Slot Bingo — state and config (§10, §11).
  *
- * Scope note: the retry dial (§6.5) is not implemented yet. Its config lives
- * here and is validated, and the state carries the fields it will need —
- * `attempts`, `history`, `livesLeft`, `status` — so turning it on later is
- * filling in a reducer rather than reshaping the board. Everything else in the
- * spec assumes retries off, which is the default and the game built here.
+ * Scope note: of the retry dial (§6.5), Model B — the re-entry draw — is built,
+ * at any number of retries including Endless. Model A (square retry), rebuy
+ * tokens and the sudden-death tail are not: their config is refused by the
+ * schema rather than accepted and silently ignored. `retriesPerSquare: 0` is
+ * still the default and the game every other section of the spec describes.
  */
 
 import { z } from 'zod'
@@ -35,6 +35,12 @@ export interface PoolMember extends CorePoolMember {
   rawText: string
   joinedAtSeq: number
   suggestions: { slotId: string; name: string; provider: string | null; thumbnail: string | null }[]
+  /**
+   * Set when this viewer is back in the pool because their square went red
+   * (Model B, §6.5.3). Drives the no-immediate-redraw rule and keeps them out
+   * of the dashboard's unresolved queue while they pick a new slot.
+   */
+  reentry?: { squareId: string; burnedAtSeq: number; thumbnail: string | null } | null
 }
 
 export interface Attempt {
@@ -151,6 +157,11 @@ export interface BingoState {
   pool: PoolMember[]
   reservedUserIds: string[]
   drawCompleted: boolean
+  /**
+   * Slots already bought and lost on under Model B. With `burnPlayedSlots` on
+   * they cannot be claimed again this session — by anyone (§6.5.3).
+   */
+  burnedSlotIds: string[]
 
   /**
    * Waiting for a square: joined after the main draw, or knocked back into the
@@ -223,7 +234,8 @@ export const bingoConfigSchema = z
     allowManualPick: z.boolean().default(true),
     allowSettleEarly: z.boolean().default(true),
 
-    // §6.5 — the retry dial. Accepted and validated; not yet implemented.
+    // §6.5 — the retry dial. Model B (reentry) is built; see the refinements
+    // below for what is refused.
     retriesPerSquare: z.number().int().min(0).max(5).nullable().default(0),
     retryModel: z.enum(['square', 'reentry']).default('reentry'),
     retrySlot: z.enum(['same', 'reroll']).default('same'),
@@ -246,6 +258,33 @@ export const bingoConfigSchema = z
         code: z.ZodIssueCode.custom,
         path: ['budgetCapCents'],
         message: 'Endless retries require a budget cap — an uncapped board has no upper bound on cost.',
+      })
+    }
+
+    /*
+     * §6.5 — only Model B is built. Accepting config for the rest and ignoring
+     * it would run a different game from the one the streamer configured, on
+     * stream, with real money. Refuse it until it exists.
+     */
+    if (config.retriesPerSquare !== 0 && config.retryModel === 'square') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['retryModel'],
+        message: 'Square retry (the viewer keeps the square) is not available yet — use re-entry.',
+      })
+    }
+    if (config.rebuyTokens > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['rebuyTokens'],
+        message: 'Rebuy tokens are not available yet.',
+      })
+    }
+    if (config.suddenDeathAfterRound !== null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['suddenDeathAfterRound'],
+        message: 'The sudden-death tail is not available yet.',
       })
     }
 

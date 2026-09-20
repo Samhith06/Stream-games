@@ -6,15 +6,17 @@
  * It didn't: the pool, the seeded draw and the slot catalog all came across
  * from Tournament unchanged.
  *
- * Retries (§6.5) are not implemented — see types.ts. `retriesPerSquare: 0` is
- * the default and the game every other section of the spec describes.
+ * Retries (§6.5): Model B — the re-entry draw — is built, including Endless.
+ * See types.ts for what is refused. `retriesPerSquare: 0` is still the default
+ * and the game every other section of the spec describes.
  */
 
 import type { GameModule, InitContext } from '@streamarena/core'
 import { round2 } from '@streamarena/core'
 import { buildLines, buildSquares, lineCountFor, squareId, unlockSchedule } from './board.js'
 import { aliveLines, bestLine, recomputeLines } from './lines.js'
-import { lineLabel, picksUntilNextUnlock, reduce } from './reduce.js'
+import { lineLabel, picksUntilNextUnlock, reduce, scoringOf } from './reduce.js'
+import { burnCount, capReached, isEndless, isReopened, retriesOn } from './retry.js'
 import { bingoConfigSchema, type BingoConfig, type BingoState } from './types.js'
 
 export const slotBingo: GameModule<BingoState, BingoConfig> = {
@@ -84,6 +86,7 @@ export const slotBingo: GameModule<BingoState, BingoConfig> = {
       pool: [],
       reservedUserIds: [],
       drawCompleted: false,
+      burnedSlotIds: [],
 
       standby: [],
       joinsOpen: true,
@@ -123,7 +126,8 @@ export const slotBingo: GameModule<BingoState, BingoConfig> = {
   project(state) {
     const lines = state.lines
     const alive = aliveLines(lines)
-    const best = bestLine(alive, () => 0)
+    const scoring = scoringOf(state)
+    const best = bestLine(alive, () => 0, scoring)
     const totals = runningTotals(state)
 
     return {
@@ -153,6 +157,16 @@ export const slotBingo: GameModule<BingoState, BingoConfig> = {
           unlockAfterPick: square.unlockAfterPick,
           /** §5.1 — the placement advantage, shown rather than hidden. */
           lineCount: lineCountFor(square, state.size),
+          /** §6.5.5 — scarred, not neutral: reopened after a red, waiting for its next owner. */
+          reopened: isReopened(square),
+          /** §6.5.3 — "C3 · 3 burned". The cursed-square counter. */
+          burnCount: burnCount(square),
+          /** Who the square took last — named on a reopened tile. */
+          lastBurned:
+            [...square.history].reverse().find((h) => h.burnedAtSeq !== null)?.username ?? null,
+          /** Reds this square can still survive. null in Endless and with retries off. */
+          livesLeft: square.livesLeft,
+          attemptCount: square.attempts.length,
         }
       }),
 
@@ -182,6 +196,32 @@ export const slotBingo: GameModule<BingoState, BingoConfig> = {
 
       bestLineId: best?.line.id ?? null,
       bestLineMultiplier: best?.line.totalMultiplier ?? null,
+      bestLineNet: best?.line.netScore ?? null,
+
+      // §6.5 — which game is running, and which score is in force (§8: show
+      // both, name the active one).
+      retryMode: retriesOn(state) ? 'reentry' : 'off',
+      retriesPerSquare: state.retriesPerSquare,
+      endless: isEndless(state),
+      scoring,
+      /** §6.5.4 — Endless swaps lines-alive for the race: greens, then net. */
+      lineLeaderboard: isEndless(state)
+        ? lines
+            .slice()
+            .sort((a, b) => b.greenCount - a.greenCount || b.netScore - a.netScore)
+            .map((l) => ({
+              id: l.id,
+              label: lineLabel(l.id),
+              greens: l.greenCount,
+              of: l.squareIds.length,
+              netScore: l.netScore,
+            }))
+        : null,
+      /** Everyone still in with a shot: standby plus viewers knocked back by a red. */
+      poolCount: state.standby.length,
+      budgetCapCents: state.budgetCapCents,
+      maxBuys: state.maxBuys,
+      capReached: capReached(state),
 
       // The bonus-hunt meter, free — §10 derived.
       totalSpent: totals.spent,
@@ -220,8 +260,10 @@ export const slotBingo: GameModule<BingoState, BingoConfig> = {
       pool: state.pool.map(poolRow),
       standby: state.standby.map(poolRow),
       reservedUserIds: state.reservedUserIds,
+      // A viewer knocked back by a red with no slot is waiting on their own
+      // !join, not on the streamer — keep them out of the unresolved queue.
       unresolved: [...state.pool, ...state.standby]
-        .filter((m) => m.slotId === null)
+        .filter((m) => m.slotId === null && !m.reentry)
         .map((m) => ({
           userId: m.userId,
           username: m.username,

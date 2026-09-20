@@ -6,9 +6,12 @@
  * seed — so a replay reaches the same winning line, which is the whole basis
  * for answering "that square was picked on purpose".
  *
- * Retries (§6.5) are not implemented. `retriesPerSquare` defaults to 0, which
- * is the game every other section describes: a square is played once and a red
- * is permanent.
+ * `retriesPerSquare` defaults to 0, which is the game every other section
+ * describes: a square is played once and a red is permanent. Any other value
+ * runs the retry dial under Model B, the re-entry draw (§6.5.3) — see retry.ts.
+ * A red with a life left reopens the square and sends its owner back into the
+ * pool; greens lock their owner in; the board ends on a bingo, a full board,
+ * a settle, or a cap.
  */
 
 import {
@@ -19,6 +22,7 @@ import {
   drawSeats,
   end,
   formatMultiplier,
+  formatSigned,
   lookup,
   rejection,
   reply,
@@ -47,6 +51,19 @@ import {
   recomputeLines,
   winnersOf,
 } from './lines.js'
+import {
+  burnCount,
+  burnSquare,
+  capReached,
+  drawablePool,
+  hasLife,
+  isEndless,
+  isReopened,
+  refillSquare,
+  retriesOn,
+  slotUnavailable,
+  startingLives,
+} from './retry.js'
 import {
   JOIN_TIMER_ID,
   type Attempt,
@@ -131,7 +148,9 @@ function join(
 ): Result {
   const { actor, messageId } = event
 
-  if (!state.joinsOpen) {
+  // Under Model B every loss reopens a square, so the board generates its own
+  // way in all session and joins never close (§6.5.2).
+  if (!state.joinsOpen && !retriesOn(state)) {
     return {
       state,
       effects: [
@@ -187,6 +206,13 @@ function standbyAck(state: BingoState, username: string, messageId?: string): Ef
   const remaining = state.squares.filter((s) => s.owner === 'open').length
   const until = picksUntilNextUnlock(state)
 
+  if (remaining === 0 && retriesOn(state)) {
+    return ack(
+      `@${username} you're in the pool — every red reopens a square, and the next one could be yours.`,
+      messageId,
+    )
+  }
+
   if (remaining === 0) {
     return rejection(
       `@${username} all squares are taken — this board is full. Next session, get in early.`,
@@ -215,11 +241,20 @@ function boardReply(
 
   const alive = aliveLines(state.lines).length
   const played = state.squares.filter((s) => s.status === 'settled').length
-  const best = bestLine(aliveLines(state.lines), (id) => ctx.rng(`flip-${id}`).next())
+  const best = bestLine(aliveLines(state.lines), (id) => ctx.rng(`flip-${id}`).next(), scoringOf(state))
+
+  // §6.5.4 — in Endless no line can die, so "lines alive" is a constant and
+  // reads as broken. Lead with the race instead: the line closest to bingo.
+  const leader = isEndless(state)
+    ? state.lines.slice().sort((a, b) => b.greenCount - a.greenCount || b.netScore - a.netScore)[0]
+    : undefined
+  const head = leader
+    ? `Leading: ${lineLabel(leader.id)} ${leader.greenCount}/${leader.squareIds.length}`
+    : `${alive} of ${state.lines.length} lines alive`
 
   const text =
-    `${alive} of ${state.lines.length} lines alive · ${played}/${state.squares.length} squares played` +
-    (best ? ` · best line ${lineLabel(best.line.id)} at ${formatMultiplier(best.line.totalMultiplier)}` : '')
+    `${head} · ${played}/${state.squares.length} squares played` +
+    (best ? ` · best line ${lineLabel(best.line.id)} at ${lineScoreText(state, best.line, ctx)}` : '')
 
   return { state: { ...state, lastStatusReplyAt: ctx.now }, effects: [reply(text)] }
 }
@@ -237,6 +272,21 @@ function mySquareReply(
       state.standby.some((p) => p.userId === actor.userId) ||
       state.pool.some((p) => p.userId === actor.userId)
     const until = picksUntilNextUnlock(state)
+
+    const knockedBack = state.standby.find((p) => p.userId === actor.userId && p.reentry)
+    if (knockedBack) {
+      return {
+        state,
+        effects: [
+          reply(
+            knockedBack.slotId === null
+              ? `@${actor.username} you're back in the pool — !join <slot> with a new slot to be drawn onto the next square that reopens.`
+              : `@${actor.username} you're back in the pool with ${knockedBack.slotName ?? 'your slot'} — you'll be drawn when a square reopens.`,
+            messageId,
+          ),
+        ],
+      }
+    }
 
     return {
       state,
@@ -300,6 +350,18 @@ function handleSlotResolved(
    * reach chat. A silently dropped !join leaves the viewer believing they are
    * entered right up until the draw passes them by.
    */
+  // §6.5.3 — a slot bought and lost on is done for the session, for everyone.
+  if (state.burnPlayedSlots && (state.burnedSlotIds ?? []).includes(event.match.slotId)) {
+    return {
+      state,
+      effects: [
+        rejection(
+          `@${member.username} ${event.match.name} was already bought this session and didn't pay — pick another slot.`,
+        ),
+      ],
+    }
+  }
+
   if (ctx.config.uniqueSlots) {
     const holder =
       findSlotHolder(state, event.match.slotId, member.userId) ??
@@ -519,7 +581,12 @@ function runDraw(state: BingoState, ctx: Ctx): Result {
     })
   }
 
-  const squares = state.squares.map((s) => byId.get(s.id) ?? s)
+  // §6.5 — every playable square starts with the configured lives. Lives
+  // belong to the square, not the viewer: a new owner inherits what is left.
+  const lives = startingLives(state)
+  const squares = state.squares
+    .map((s) => byId.get(s.id) ?? s)
+    .map((s) => (s.owner === 'free' ? s : { ...s, livesLeft: lives }))
   const pickOrder = commitPickOrder(squares, openIds, schedule, ctx.rng('pick-order'))
 
   const next: BingoState = {
@@ -532,7 +599,7 @@ function runDraw(state: BingoState, ctx: Ctx): Result {
     standby: [...state.standby, ...draw.unpicked],
     drawCompleted: true,
     joinsClosed: true,
-    joinsOpen: held > 0,
+    joinsOpen: held > 0 || retriesOn(state),
     unlockSchedule: schedule,
     pickOrder,
     joinWindowEndsAt: null,
@@ -558,22 +625,38 @@ function runDraw(state: BingoState, ctx: Ctx): Result {
 function pickNext(state: BingoState, ctx: Ctx, manualId: string | null): Result {
   if (state.phase === 'complete') return { state, effects: [] }
 
+  // §6.5.8 — never start a buy the cap cannot cover. The board resolves on
+  // best line, labelled capped rather than settled.
+  const cap = capReached(state)
+  if (cap) return settle(state, ctx, 'capped')
+
   const byId = new Map(state.squares.map((s) => [s.id, s]))
 
   let targetId: string | null = null
   if (manualId) {
     if (!ctx.config.allowManualPick) return { state, effects: [] }
     const square = byId.get(manualId)
-    if (!square || square.status === 'settled' || square.owner === 'open') {
-      return { state, effects: [] }
-    }
+    if (!square || square.status === 'settled') return { state, effects: [] }
+    if (square.owner === 'open' && !isReopened(square)) return { state, effects: [] }
     targetId = manualId
   } else {
     // Walk the committed order past anything already settled or still unopened.
     let cursor = state.pickCursor
     while (cursor < state.pickOrder.length) {
-      const candidate = byId.get(state.pickOrder[cursor]!)
-      if (candidate && candidate.status !== 'settled' && candidate.owner !== 'open') break
+      const id = state.pickOrder[cursor]!
+      const candidate = byId.get(id)
+      if (candidate && candidate.status !== 'settled') {
+        if (candidate.owner !== 'open') break
+
+        // A reopened square is played when the cursor reaches it — refilled
+        // from the pool first. With nobody drawable it rolls to the back while
+        // there is other work, and plays as HOUSE once it is the last thing
+        // left (§6.5.3, same ladder as an empty standby in §13).
+        if (isReopened(candidate)) {
+          if (drawablePool(state).length > 0 || !hasPendingOwned(state, cursor, id)) break
+          state = { ...state, pickOrder: [...state.pickOrder, id] }
+        }
+      }
       cursor++
     }
     if (cursor >= state.pickOrder.length) return settle(state, ctx, 'bestLine')
@@ -581,7 +664,32 @@ function pickNext(state: BingoState, ctx: Ctx, manualId: string | null): Result 
     state = { ...state, pickCursor: cursor }
   }
 
-  const square = byId.get(targetId)!
+  const effects: Effect[] = []
+
+  if (isReopened(byId.get(targetId)!)) {
+    const refilled = refillSquare(state, targetId, ctx)
+    if (refilled) {
+      state = refilled.state
+      const square = state.squares.find((s) => s.id === targetId)!
+      const alive = state.lines.filter((l) => l.squareIds.includes(targetId!) && l.state !== 'dead').length
+      effects.push(
+        announce(
+          `${targetId} reopens to @${square.username} · ${square.slotName ?? 'slot'} — ` +
+            `${burnCount(square)} burned here before. Sits on ${alive} live ${alive === 1 ? 'line' : 'lines'}.`,
+        ),
+      )
+    } else {
+      state = {
+        ...state,
+        squares: state.squares.map((s) =>
+          s.id === targetId ? { ...s, owner: 'house' as const, source: 'house' as const, livesLeft: 0 } : s,
+        ),
+      }
+      effects.push(announce(`${targetId} reopens with nobody left in the pool — it plays as HOUSE.`))
+    }
+  }
+
+  const square = state.squares.find((s) => s.id === targetId)!
   const next: BingoState = {
     ...state,
     phase: 'buying',
@@ -594,7 +702,7 @@ function pickNext(state: BingoState, ctx: Ctx, manualId: string | null): Result 
   const lines = state.lines.filter((l) => l.squareIds.includes(targetId!))
   const matchPoint = lines.filter((l) => l.state === 'oneAway')
 
-  const effects: Effect[] = [
+  effects.push(
     broadcast({
       phase: 'buying',
       currentSquareId: targetId,
@@ -602,7 +710,7 @@ function pickNext(state: BingoState, ctx: Ctx, manualId: string | null): Result 
       // board this is one-away seen from the square's side.
       matchPointLines: matchPoint.map((l) => l.id),
     }),
-  ]
+  )
 
   if (matchPoint.length > 0) {
     effects.push(
@@ -615,6 +723,18 @@ function pickNext(state: BingoState, ctx: Ctx, manualId: string | null): Result 
   }
 
   return { state: next, effects }
+}
+
+/** Any owned, unsettled square still ahead of the cursor — work the board can do without the pool. */
+function hasPendingOwned(state: BingoState, cursor: number, exceptId: string): boolean {
+  const byId = new Map(state.squares.map((s) => [s.id, s]))
+  for (let i = cursor + 1; i < state.pickOrder.length; i++) {
+    const id = state.pickOrder[i]!
+    if (id === exceptId) continue
+    const square = byId.get(id)
+    if (square && square.owner !== 'open' && square.status !== 'settled') return true
+  }
+  return false
 }
 
 /**
@@ -651,19 +771,26 @@ function enterResult(state: BingoState, p: Record<string, unknown>, ctx: Ctx): R
     rebuy: false,
   }
 
+  // §6.5.3 — a red with a life left does not settle. The square reopens and
+  // its owner goes back in the pool; every other result settles as before.
+  const burns = tier === 'red' && hasLife(state, square)
+
   const squares = state.squares.map((s) =>
     s.id === targetId
-      ? { ...s, attempts: [...s.attempts, attempt], status: 'settled' as const, tier }
+      ? burns
+        ? { ...s, attempts: [...s.attempts, attempt] }
+        : { ...s, attempts: [...s.attempts, attempt], status: 'settled' as const, tier }
       : s,
   )
 
-  const withResult: BingoState = {
+  let withResult: BingoState = {
     ...state,
     squares,
     phase: 'result',
     currentSquareId: null,
     pickCursor: state.pickCursor + 1,
   }
+  if (burns) withResult = burnSquare(withResult, targetId, ctx)
   const lines = recomputeLines(withResult)
   const next = { ...withResult, lines }
 
@@ -672,6 +799,29 @@ function enterResult(state: BingoState, p: Record<string, unknown>, ctx: Ctx): R
       flash: { squareId: targetId, multiplier, tier, slotName: square.slotName },
     }),
   ]
+
+  if (burns) {
+    const reopened = next.squares.find((s) => s.id === targetId)!
+    const burned = burnCount(reopened)
+    const lives =
+      reopened.livesLeft === null
+        ? ''
+        : reopened.livesLeft === 0
+          ? ` Last life — the next red on ${targetId} is final.`
+          : ` ${reopened.livesLeft} ${reopened.livesLeft === 1 ? 'life' : 'lives'} left on ${targetId}.`
+    const invite = state.burnPlayedSlots
+      ? ` @${square.username} — !join <slot> with a new slot to get back on the board.`
+      : ` @${square.username} — !join <slot> to switch, or sit tight with ${square.slotName ?? 'your slot'}.`
+
+    effects.push(
+      announce(
+        `${targetId} didn't pay — @${square.username} goes back in the pool. ` +
+          `Square reopens, ${next.standby.length} waiting. ${burned} burned here now.` +
+          lives +
+          invite,
+      ),
+    )
+  }
 
   if (tier === 'gold') {
     effects.push(
@@ -694,8 +844,11 @@ function enterResult(state: BingoState, p: Record<string, unknown>, ctx: Ctx): R
     return chain(next, effects, (s) => runUnlock(s, ctx))
   }
 
-  // Board full — no bingo, so it resolves on best line.
-  const playable = next.squares.filter((s) => s.owner !== 'open' && s.status !== 'settled')
+  // Board full — no bingo, so it resolves on best line. A reopened square is
+  // still work to do, owner or not.
+  const playable = next.squares.filter(
+    (s) => s.status !== 'settled' && (s.owner !== 'open' || isReopened(s)),
+  )
   if (playable.length === 0) return chain(next, effects, (s) => settle(s, ctx, 'bestLine'))
 
   return { state: next, effects }
@@ -768,38 +921,57 @@ function declareBingo(
 /**
  * Best line — §8.
  *
- * `settledEarly` narrows the field to lines whose squares have all been played:
- * a line still holding an unplayed square has not earned anything yet.
+ * `settledEarly` and `capped` narrow the field to lines whose squares have all
+ * been played: a line still holding an unplayed or wounded square has not
+ * earned anything yet. With retries on the line score is net, not multiplier.
  */
-function settle(state: BingoState, ctx: Ctx, reason: 'bestLine' | 'settledEarly'): Result {
+function settle(
+  state: BingoState,
+  ctx: Ctx,
+  reason: 'bestLine' | 'settledEarly' | 'capped',
+): Result {
   if (state.phase === 'complete') return { state, effects: [] }
   if (reason === 'settledEarly' && !ctx.config.allowSettleEarly) return { state, effects: [] }
 
   const lines = recomputeLines(state)
   const eligible =
-    reason === 'settledEarly'
-      ? fullyPlayedLines(state, lines)
-      : lines.filter((l) => l.state !== 'dead' || l.greenCount > 0)
+    reason === 'bestLine'
+      ? lines.filter((l) => l.state !== 'dead' || l.greenCount > 0)
+      : fullyPlayedLines(state, lines)
 
-  const picked = bestLine(eligible.length > 0 ? eligible : lines, (id) => ctx.rng(`flip-${id}`).next())
+  const picked = bestLine(
+    eligible.length > 0 ? eligible : lines,
+    (id) => ctx.rng(`flip-${id}`).next(),
+    scoringOf(state),
+  )
 
   const next: BingoState = {
     ...state,
     lines,
     phase: 'complete',
+    currentSquareId: null,
     winningLine: picked?.line.id ?? null,
     winners: picked ? winnersOf({ ...state, lines }, [picked.line.id]) : [],
-    decidedBy: reason === 'settledEarly' ? 'settledEarly' : (picked?.decidedBy ?? 'bestLine'),
+    decidedBy: reason === 'bestLine' ? (picked?.decidedBy ?? 'bestLine') : reason,
     settledEarly: reason === 'settledEarly',
   }
 
   const label = picked ? lineLabel(picked.line.id) : 'no line'
+  const opener =
+    reason === 'settledEarly'
+      ? 'Settled early. '
+      : reason === 'capped'
+        ? capReached(state) === 'buys'
+          ? 'Buy cap reached. '
+          : 'Budget cap reached. '
+        : 'Board complete. '
+
   return {
     state: next,
     effects: [
       announce(
-        (reason === 'settledEarly' ? 'Settled early. ' : 'Board complete. ') +
-          `Best line: ${label} at ${picked ? formatMultiplier(picked.line.totalMultiplier) : '—'}` +
+        opener +
+          `Best line: ${label} at ${picked ? lineScoreText(state, picked.line, ctx) : '—'}` +
           (next.winners.length > 0
             ? ` — ${next.winners.map((w) => `@${w.username}`).join(', ')}.`
             : '.'),
@@ -810,6 +982,17 @@ function settle(state: BingoState, ctx: Ctx, reason: 'bestLine' | 'settledEarly'
   }
 }
 
+/** §8 — the score in force: net P&L with retries on, combined multiplier without. */
+export function scoringOf(state: BingoState): 'multiplier' | 'net' {
+  return retriesOn(state) ? 'net' : 'multiplier'
+}
+
+function lineScoreText(state: BingoState, line: Line, ctx: Ctx): string {
+  return scoringOf(state) === 'net'
+    ? formatSigned(line.netScore, ctx.config.currency)
+    : formatMultiplier(line.totalMultiplier)
+}
+
 /** An unlock mini-draw — §5.3. Same primitive as the main draw, smaller. */
 function runUnlock(state: BingoState, ctx: Ctx): Result {
   const open = state.squares.find((s) => s.owner === 'open' && s.unlockAfterPick !== null)
@@ -818,7 +1001,9 @@ function runUnlock(state: BingoState, ctx: Ctx): Result {
   // Only viewers who joined since the previous unlock — that is what makes the
   // reward for arriving late a real shot rather than an apology.
   const since = state.lastUnlockSeq ?? -1
-  const eligible = state.standby.filter((m) => m.slotId !== null && m.joinedAtSeq > since)
+  const eligible = state.standby.filter(
+    (m) => m.slotId !== null && m.joinedAtSeq > since && !slotUnavailable(state, m.slotId, m.userId),
+  )
 
   const draw = drawSeats(eligible, { seats: 1, reservedUserIds: [], rng: ctx.rng('unlock') })
   const seat = draw.seats[0]
@@ -865,7 +1050,7 @@ function runUnlock(state: BingoState, ctx: Ctx): Result {
     standby: state.standby.filter((m) => m.userId !== seat.member.userId),
     unlocksDone: state.unlocksDone + 1,
     lastUnlockSeq: ctx.seq,
-    joinsOpen: stillOpen,
+    joinsOpen: stillOpen || retriesOn(state),
   }
 
   // §5.3 — a late square may sit on lines that are already dead, and the
@@ -898,7 +1083,12 @@ function skipUnlock(state: BingoState, ctx: Ctx): Result {
 
   void ctx
   return {
-    state: { ...state, squares, unlocksDone: state.unlocksDone + 1, joinsOpen: stillOpen },
+    state: {
+      ...state,
+      squares,
+      unlocksDone: state.unlocksDone + 1,
+      joinsOpen: stillOpen || retriesOn(state),
+    },
     effects: [],
   }
 }
@@ -953,6 +1143,91 @@ function revert(state: BingoState, targetId: string, ctx: Ctx): Result {
   const square = state.squares.find((s) => s.id === targetId)
   if (!square || square.attempts.length === 0) return { state, effects: [] }
 
+  const last = square.attempts[square.attempts.length - 1]!
+  const lastOwner = square.history[square.history.length - 1]
+  const knockedBack = lastOwner ? state.standby.find((m) => m.userId === lastOwner.userId) : undefined
+
+  // §9 — with retries, a red that burned its owner is undone by giving the
+  // square back and taking them out of the pool again. Only while nothing has
+  // happened on top of it: a viewer already redrawn onto this square, or the
+  // loser already drawn onto another one, has been announced on stream, and
+  // un-drawing them is worse than the typo.
+  const burnedBy = square.history.find((h) => h.burnedAtSeq !== null && h.burnedAtSeq === last.seq)
+  if (burnedBy && burnedBy !== lastOwner) {
+    return {
+      state,
+      effects: [
+        broadcast({
+          inputError: `${targetId} has already been redrawn to a new owner — revert is blocked.`,
+        }),
+      ],
+    }
+  }
+
+  if (lastOwner && lastOwner.burnedAtSeq === last.seq) {
+    if (square.owner !== 'open') {
+      return {
+        state,
+        effects: [
+          broadcast({
+            inputError: `${targetId} has already been redrawn to a new owner — revert is blocked.`,
+          }),
+        ],
+      }
+    }
+    if (state.squares.some((s) => s.userId === lastOwner.userId)) {
+      return {
+        state,
+        effects: [
+          broadcast({
+            inputError: `@${lastOwner.username} has already been drawn onto another square — revert is blocked.`,
+          }),
+        ],
+      }
+    }
+
+    const history = square.history.slice()
+    history[history.length - 1] = { ...lastOwner, burnedAtSeq: null }
+    const attempts = square.attempts.slice(0, -1)
+
+    const restored: Square = {
+      ...square,
+      userId: lastOwner.userId,
+      username: lastOwner.username,
+      slotId: lastOwner.slotId,
+      slotName: lastOwner.slotName,
+      thumbnail: knockedBack?.reentry?.squareId === targetId ? knockedBack.reentry.thumbnail : null,
+      owner: 'viewer',
+      claimedAtSeq: lastOwner.claimedAtSeq,
+      history,
+      attempts,
+      livesLeft: square.livesLeft === null ? null : square.livesLeft + 1,
+      status: attempts.length > 0 ? 'wounded' : 'unplayed',
+      tier: null,
+    }
+
+    // The reopening put the square on the end of the order. Nothing can have
+    // played that copy yet — it would have left a newer attempt to revert.
+    const at = state.pickOrder.lastIndexOf(targetId)
+    const pickOrder = at > state.pickCursor - 1 ? state.pickOrder.filter((_, i) => i !== at) : state.pickOrder
+
+    const next: BingoState = {
+      ...state,
+      squares: state.squares.map((s) => (s.id === targetId ? restored : s)),
+      standby: state.standby.filter((m) => m.userId !== lastOwner.userId),
+      burnedSlotIds: (state.burnedSlotIds ?? []).filter(
+        (id) => id !== lastOwner.slotId || otherBurnOf(state, id, targetId, last.seq),
+      ),
+      pickOrder,
+      pickCursor: Math.max(0, state.pickCursor - 1),
+    }
+    void ctx
+    return {
+      state: { ...next, lines: recomputeLines(next) },
+      effects: [broadcast({ phase: next.phase })],
+    }
+  }
+
   const squares = state.squares.map((s) =>
     s.id === targetId
       ? {
@@ -970,6 +1245,15 @@ function revert(state: BingoState, targetId: string, ctx: Ctx): Result {
     state: { ...next, lines: recomputeLines(next) },
     effects: [broadcast({ phase: next.phase })],
   }
+}
+
+/** Whether a slot was burned somewhere other than the attempt being reverted. */
+function otherBurnOf(state: BingoState, slotId: string, squareId: string, seq: number): boolean {
+  return state.squares.some((s) =>
+    s.history.some(
+      (h) => h.slotId === slotId && h.burnedAtSeq !== null && !(s.id === squareId && h.burnedAtSeq === seq),
+    ),
+  )
 }
 
 // ─── helpers ────────────────────────────────────────────────────────────────

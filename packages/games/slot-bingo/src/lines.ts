@@ -10,7 +10,11 @@
 import { round2 } from '@streamarena/core'
 import type { BingoState, DecidedBy, Line, Square } from './types.js'
 
-/** A square that will never be green. With retries off, any red is permanent. */
+/**
+ * A square that will never be green. With retries off, any red is permanent.
+ * Under Model B a red with a life left never settles — the square reopens as
+ * `wounded` — so a settled red is exactly a red that was out of lives (§7.1).
+ */
 function isPermanentRed(square: Square): boolean {
   return square.status === 'settled' && square.tier === 'red'
 }
@@ -99,21 +103,31 @@ export function completedLines(lines: readonly Line[]): Line[] {
  * `eligible` is what changes between a full board and a settle-early: a settle
  * only considers lines whose squares have all been played, because a line
  * holding an unplayed square has not earned anything yet.
+ *
+ * `scoring` is what changes with retries on. Combined multiplier rewards the
+ * line that burned the most money — a square that went 0.2× → 0.4× → 80×
+ * scores 80× — so a retry board scores on net across every attempt, reds
+ * included, and swaps "more greens" (which every settled square now is) for
+ * "fewer attempts" in the ladder (§8, scoring with retries on).
  */
 export function bestLine(
   lines: readonly Line[],
   seedFlip: (lineId: string) => number,
+  scoring: 'multiplier' | 'net' = 'multiplier',
 ): { line: Line; decidedBy: DecidedBy } | null {
   if (lines.length === 0) return null
 
+  const primary = (l: Line) => (scoring === 'net' ? l.netScore : l.totalMultiplier)
+  // Rung 3 differs by mode. Both are "higher is better" once signed this way.
+  const third = (l: Line) => (scoring === 'net' ? -l.attemptCount : l.greenCount)
+
   const ranked = lines.slice().sort((a, b) => {
-    // 1. Highest combined multiplier. (With retries on this becomes netScore —
-    //    see §8; the default board scores on multiplier.)
-    if (b.totalMultiplier !== a.totalMultiplier) return b.totalMultiplier - a.totalMultiplier
+    // 1. Highest combined multiplier — or net, with retries on.
+    if (primary(b) !== primary(a)) return primary(b) - primary(a)
     // 2. Higher combined payout.
     if (b.totalPayout !== a.totalPayout) return b.totalPayout - a.totalPayout
-    // 3. More green squares.
-    if (b.greenCount !== a.greenCount) return b.greenCount - a.greenCount
+    // 3. More green squares — or fewer total attempts, with retries on.
+    if (third(b) !== third(a)) return third(b) - third(a)
     // 4. Lower combined buy cost — the line that got there cheapest.
     if (a.totalCost !== b.totalCost) return a.totalCost - b.totalCost
     // 5. Seeded coin flip. Deterministic, so a replay picks the same winner.
@@ -126,14 +140,16 @@ export function bestLine(
   // Naming *which* rung decided it is not decoration: §8 requires the board to
   // say how it was decided, because an unexplained winning line reads as broken
   // software.
-  let decidedBy: DecidedBy = 'bestLine'
+  let decidedBy: DecidedBy = scoring === 'net' ? 'net' : 'bestLine'
   if (runnerUp) {
-    if (winner.totalMultiplier === runnerUp.totalMultiplier) {
+    if (primary(winner) === primary(runnerUp)) {
       decidedBy =
         winner.totalPayout !== runnerUp.totalPayout
           ? 'payout'
-          : winner.greenCount !== runnerUp.greenCount
-            ? 'greenCount'
+          : third(winner) !== third(runnerUp)
+            ? scoring === 'net'
+              ? 'attempts'
+              : 'greenCount'
             : winner.totalCost !== runnerUp.totalCost
               ? 'cost'
               : 'coinflip'
