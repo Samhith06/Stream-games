@@ -268,3 +268,119 @@ export function bingoResult(state) {
     }
   </div>`
 }
+
+/**
+ * Who is on the board, and what they called — the roster.
+ *
+ * The board answers "what is on C3". This answers "where is rosie_x", which is
+ * the question a streamer actually gets asked in chat, and answers it without
+ * hunting a 5×5 grid for a name. It also doubles as the thing to read aloud
+ * after the draw: twenty-five names and slots in one column.
+ *
+ * **Ordered by the board, never by the pick order.** The committed order is
+ * secret — §5.1 publishes a hash of it precisely so nobody can claim a square
+ * was played on purpose, and the setup screen promises "nobody sees it in
+ * advance, including you". Sorting this list by `pickOrder` would be the most
+ * natural thing in the world and would quietly hand the streamer the one fact
+ * the whole commitment exists to withhold. Reading order it is.
+ */
+export function participantList(state) {
+  const squares = state.squares ?? []
+  const seated = squares.filter((s) => s.username)
+  const waiting = state.standby ?? []
+
+  return `
+  <div class="bg-surface-container rounded-xl border border-outline-variant p-md">
+    <div class="flex justify-between items-baseline mb-md gap-sm">
+      <h3 class="font-headline-md text-[18px] font-bold">Participants</h3>
+      <span class="font-data-mono text-[11px] text-on-surface-variant">
+        ${seated.length} on the board${waiting.length > 0 ? ` · ${waiting.length} waiting` : ''}
+      </span>
+    </div>
+
+    <div class="flex flex-col gap-1 max-h-[420px] overflow-y-auto pr-1">
+      ${squares.map(rosterRow).join('')}
+    </div>
+
+    ${
+      waiting.length > 0
+        ? `<details class="mt-md border-t border-outline-variant pt-md">
+             <summary class="cursor-pointer list-none flex items-center gap-sm
+                             font-label-caps text-label-caps uppercase text-on-surface-variant">
+               <span class="material-symbols-outlined text-[18px]">hourglass_empty</span>
+               ${waiting.length} waiting for a square
+             </summary>
+             <div class="flex flex-col gap-1 mt-sm max-h-[260px] overflow-y-auto pr-1">
+               ${waiting.map(waitingRow).join('')}
+             </div>
+           </details>`
+        : ''
+    }
+  </div>`
+}
+
+/** One square's seat: who holds it, what they called, and how it went. */
+function rosterRow(square) {
+  const empty = !square.username
+
+  return `
+  <div class="flex items-center gap-sm px-sm py-1 rounded ${empty ? 'opacity-50' : 'hover:bg-surface-container-high'}">
+    <span class="font-data-mono text-[12px] text-on-surface-variant w-8 shrink-0">${escapeHtml(square.id)}</span>
+    <span class="flex-1 min-w-0 truncate">
+      ${
+        empty
+          ? `<span class="text-on-surface-variant text-sm">${seatLabel(square)}</span>`
+          : `<span class="font-bold text-sm">${escapeHtml(square.username)}</span>
+             <span class="text-on-surface-variant text-sm"> · ${escapeHtml(square.slotName ?? 'no slot yet')}</span>`
+      }
+    </span>
+    ${rosterState(square)}
+  </div>`
+}
+
+/** What an empty square is waiting for — the three reasons differ on screen. */
+function seatLabel(square) {
+  if (square.owner === 'free') return 'Free centre'
+  if (square.reopened) return `Reopened${square.lastBurned ? ` · burned @${escapeHtml(square.lastBurned)}` : ''}`
+  if (square.unlockAfterPick !== null && square.unlockAfterPick !== undefined) {
+    return `Opens after pick ${square.unlockAfterPick}`
+  }
+  return 'House'
+}
+
+/** The right-hand chip: a result once there is one, otherwise what it is waiting on. */
+function rosterState(square) {
+  if (square.status === 'settled' && square.tier) {
+    const tone =
+      square.tier === 'gold' ? 'text-gold' : square.tier === 'green' ? 'text-win' : 'text-loss'
+    return `<span class="font-data-mono text-[12px] ${tone} shrink-0">
+        ${square.multiplier === null || square.multiplier === undefined ? square.tier.toUpperCase() : multiplier(square.multiplier)}
+      </span>`
+  }
+
+  // §6.5.3 — the cursed-square counter, where it is useful rather than decorative.
+  if (square.burnCount > 0) {
+    return `<span class="font-data-mono text-[11px] text-loss shrink-0">${square.burnCount} burned</span>`
+  }
+
+  return '<span class="font-data-mono text-[11px] text-on-surface-variant/50 shrink-0">—</span>'
+}
+
+/**
+ * Someone in the queue. A re-entrant who lost their slot to `burnPlayedSlots`
+ * is waiting on their own `!join` rather than on the streamer, and saying so
+ * is the difference between a queue and a list of names.
+ */
+function waitingRow(member) {
+  return `
+  <div class="flex items-center gap-sm px-sm py-1 rounded hover:bg-surface-container-high">
+    <span class="flex-1 min-w-0 truncate text-sm">
+      <span class="font-bold">${escapeHtml(member.username)}</span>
+      ${
+        member.slotName
+          ? `<span class="text-on-surface-variant"> · ${escapeHtml(member.slotName)}</span>`
+          : '<span class="text-on-surface-variant/60"> · waiting on their !join</span>'
+      }
+    </span>
+  </div>`
+}

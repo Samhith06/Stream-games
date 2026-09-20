@@ -15,7 +15,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { GameEngine, type InternalEvent } from '@streamarena/core'
 import { slotBingo } from '@streamarena/game-slot-bingo'
-import { bingoBoard, bingoJoining, bingoResult, lineRail } from '../public/bingo-view.js'
+import { bingoBoard, bingoJoining, bingoResult, lineRail, participantList } from '../public/bingo-view.js'
 
 const OWNER = { userId: 'owner-1', username: 'streamer', role: 'broadcaster' as const }
 
@@ -225,4 +225,87 @@ test('the unresolved queue arrives in the shape the shared panel normalises', ()
   assert.ok(item.userId, 'the panel has no id to key on')
   assert.ok(item.username, 'the panel has no name to show')
   assert.ok(item.rawText, 'the alias flywheel needs what the viewer typed')
+})
+
+// ─── the participant roster ─────────────────────────────────────────────────
+
+test('every seated viewer appears with the slot they called', () => {
+  const { dashboard } = play([...nine(), control('draw.run')])
+  const html = participantList(dashboard)
+
+  for (const square of dashboard.squares) {
+    if (!square.username) continue
+    assert.ok(html.includes(square.username), `${square.username} is missing from the roster`)
+    assert.ok(
+      html.includes(square.slotName),
+      `${square.username} is on the roster without the slot they called`,
+    )
+    assert.ok(html.includes(`>${square.id}</span>`), `${square.id} is missing its seat`)
+  }
+})
+
+test('the roster is ordered by the board, never by the committed pick order', () => {
+  /*
+   * §5.1 — the order is committed at the draw and revealed one square at a
+   * time, and the setup screen promises "nobody sees it in advance, including
+   * you". Sorting the roster by pickOrder would be the obvious thing to do and
+   * would hand the streamer the one fact the commitment exists to withhold.
+   */
+  const { dashboard } = play([...nine(), control('draw.run')])
+  const html = participantList(dashboard)
+
+  const shown = [...html.matchAll(/>([A-C][1-3])<\/span>/g)].map((m) => m[1])
+  const board = dashboard.squares.map((s: { id: string }) => s.id)
+  assert.deepEqual(shown, board, 'the roster drifted from board order')
+
+  // And the guard that matters: it must not match the secret order. (If the
+  // seed ever happens to commit the board order itself, this is vacuous rather
+  // than wrong — hence the check above carries the real weight.)
+  assert.notEqual(
+    dashboard.pickOrder.join(','),
+    shown.join(','),
+    'the roster is in pick order — that order is supposed to be secret',
+  )
+})
+
+test('a played square shows its result rather than a placeholder', () => {
+  const { dashboard } = play([...nine(), control('draw.run'), settle('A1', 12.5)])
+  const html = participantList(dashboard)
+
+  assert.ok(html.includes('12.50x'), 'the multiplier never reached the roster')
+  assert.ok(html.includes('text-win'), 'a green result should be coloured green')
+})
+
+test('an empty seat says what it is waiting for', () => {
+  // Three squares held back on a 3×3 is refused by the schema, so this is the
+  // one open square a 3×3 allows.
+  const engine = new GameEngine(slotBingo, {
+    config: slotBingo.configSchema.parse({ size: 3, openSquares: 1 }),
+    init: { sessionId: 's-2', channelId: 'c-1', seed: 'roster-seed', startedAt: 1_000, owner: OWNER },
+  })
+  seq = 0
+  let state = engine.initialState()
+  for (const event of [...nine(), control('draw.run')]) state = engine.apply(state, event).state
+
+  const dashboard = engine.projectDashboard(state) as Record<string, any>
+  const held = dashboard.squares.find((s: { unlockAfterPick: number | null }) => s.unlockAfterPick !== null)
+  assert.ok(held, 'the board should have held one square back')
+
+  assert.ok(
+    participantList(dashboard).includes(`Opens after pick ${held.unlockAfterPick}`),
+    'a held-back seat should say when it opens, not sit blank',
+  )
+})
+
+test('the queue is listed, and names who is waiting on their own !join', () => {
+  // Ten joiners for nine squares: one is left in standby with a resolved slot.
+  const { dashboard } = play([...nine(), ...join('jo', 'Slot J'), control('draw.run')])
+
+  assert.ok(dashboard.standby.length > 0, 'somebody should have missed the draw')
+  const html = participantList(dashboard)
+
+  assert.ok(html.includes('waiting for a square'), 'the queue is not shown at all')
+  for (const member of dashboard.standby) {
+    assert.ok(html.includes(member.username), `${member.username} is missing from the queue`)
+  }
 })

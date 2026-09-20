@@ -36,7 +36,7 @@
 <script type="module">
 import { api, control, connect, attempt, toast, money, signed, multiplier, countdown, copy, $, escapeHtml, slotTile, requireSessionId } from './app.js'
 import { mountShell } from './shell.js'
-import { bingoBoard, bingoJoining, bingoResult, lineRail } from './bingo-view.js'
+import { bingoBoard, bingoJoining, bingoResult, lineRail, participantList } from './bingo-view.js'
 import { battlesJoining, battlesResult, ledger, pickCard, swingHero, teamColumns } from './battles-view.js'
 import {
   claimHero, clock as gaClock, currentPrize, entryFeed, entryHero, exhaustedPanel,
@@ -757,7 +757,11 @@ function bingo() {
 
   <div class="grid grid-cols-1 xl:grid-cols-12 gap-lg">
     <div class="xl:col-span-7">${bingoBoard(state, { manualPick: detail.config.allowManualPick !== false })}</div>
-    <div class="xl:col-span-5 flex flex-col gap-lg">${lineRail(state)}${unresolved()}</div>
+    <div class="xl:col-span-5 flex flex-col gap-lg">${lineRail(state)}${unresolved()}${
+      // The roster is only an answer once the squares have owners — before the
+      // draw the joining panel above is already counting entrants.
+      state.drawCompleted ? participantList(state) : ''
+    }</div>
   </div>`
 }
 
