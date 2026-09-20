@@ -81,6 +81,18 @@ const saved = await api(`/api/games/${gameId}/config`)
 const cfg = { ...saved.config }
 const policy = { ...saved.chatPolicy }
 
+/*
+ * Sections the streamer has to open on purpose — Slot Bingo §6.5: "a
+ * disclosure block, collapsed by default. A streamer who never opens it gets
+ * the default game, which is the intent."
+ *
+ * The open ones are remembered across renders, because the block re-renders
+ * every time a dial inside it moves and a block that snapped shut under the
+ * streamer's hand would be unusable. Declared up here rather than beside
+ * section(), because the first render() reaches it before that line.
+ */
+const OPENED = new Set()
+
 if (gameId === 'slot-bingo') normaliseBingo()
 
 render()
@@ -179,6 +191,41 @@ function bingoFields() {
       { note: 'Joining does not close when the window does — it stays open until the last held-back square is claimed, so a viewer arriving at pick 14 can still get in.' },
     ]},
 
+    /*
+     * §6.5 — collapsed by default and labelled with where the dial currently
+     * stands, so a streamer who never opens it gets Sudden Death, which is the
+     * game every other section of the spec describes.
+     */
+    { title: 'Second chances', icon: 'replay', disclosure: true,
+      state: retriesOn() ? retryTier().name : 'off', rows: [
+      { k: 'retriesPerSquare', label: 'Retries per square', type: 'segment',
+        options: retryTiers().map((t) => [t.value === null ? 'null' : t.value, t.name]) },
+      { live: 'retries' },
+
+      ...(retriesOn()
+        ? [
+            { k: 'retryModel', label: 'When a square goes red', type: 'choice', options: [
+              ['reentry', 'The viewer goes back in the draw',
+               'The square reopens for someone else. Every loss reopens a square, so late arrivals always have a queue to join.'],
+              ['square', 'The viewer keeps the square and buys again',
+               'They ride their slot until it pays or kills them. Not built yet — the board refuses to open on this setting.',
+               true],
+            ]},
+
+            // §6.5: required on Endless, and the form refuses to submit
+            // without it rather than warning. Optional otherwise, but the
+            // ceiling is the only thing that ends an Endless board on purpose.
+            { k: 'budgetCapCents', label: `Budget cap (${cfg.currency ?? 'EUR'})`, type: 'cents',
+              half: true, placeholder: retryTier().value === null ? 'Required' : 'Optional',
+              hint: retryTier().value === null
+                ? 'Endless ends on a bingo, a settle, or this. Without it the board has no upper bound on what it costs.'
+                : 'Optional. The board stops here even if no line has completed.' },
+          ]
+        : []),
+
+      { note: 'Rebuy tokens, the sudden-death tail and "the viewer keeps the square" are in the spec but not built. Their settings are refused rather than accepted and quietly ignored — running a different game from the one you configured, on stream, with real money, is the failure worth being strict about.' },
+    ]},
+
     { title: 'During the board', icon: 'play_circle', rows: [
       { k: 'allowManualPick', label: 'Allow playing a square out of order', type: 'toggle',
         hint: 'For a viewer who just subbed, or to build a moment. It is badged Streamer’s pick on the square and in the log.' },
@@ -232,15 +279,33 @@ function clamp(n, min, max) {
 }
 
 function section(sec) {
+  const body = `
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-md">
+      ${sec.rows.map(row).join('')}
+    </div>`
+
+  if (sec.disclosure) {
+    return `
+  <details class="card-glass rounded-xl p-lg" data-disclosure="${escapeHtml(sec.title)}"
+           ${OPENED.has(sec.title) ? 'open' : ''}>
+    <summary class="flex items-center gap-sm cursor-pointer list-none
+                    ${OPENED.has(sec.title) ? 'mb-lg border-b border-outline-variant pb-sm' : ''}">
+      <span class="material-symbols-outlined text-primary">${sec.icon}</span>
+      <h2 class="font-headline-md text-headline-md flex-1">${escapeHtml(sec.title)}</h2>
+      <span class="font-data-mono text-sm text-on-surface-variant">${escapeHtml(sec.state ?? '')}</span>
+      <span class="material-symbols-outlined text-on-surface-variant">expand_more</span>
+    </summary>
+    ${body}
+  </details>`
+  }
+
   return `
   <section class="card-glass rounded-xl p-lg ${sec.accent === 'secondary' ? 'border-t-2 border-t-secondary/50' : ''}">
     <div class="flex items-center gap-sm mb-lg border-b border-outline-variant pb-sm">
       <span class="material-symbols-outlined text-primary">${sec.icon}</span>
       <h2 class="font-headline-md text-headline-md">${sec.title}</h2>
     </div>
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-md">
-      ${sec.rows.map(row).join('')}
-    </div>
+    ${body}
   </section>`
 }
 
@@ -394,6 +459,41 @@ function row(f) {
         </div>`
       break
     }
+    /*
+     * A radio whose options carry their consequence — §6.5.2 asks for the
+     * choice between the two retry models to state what each one does to the
+     * session underneath it, and an option the build does not support yet is
+     * shown disabled rather than hidden, the same treatment the free centre
+     * gets on a 3×3.
+     */
+    case 'choice':
+      field = `<div class="flex flex-col gap-sm">
+        ${f.options.map(([v, title, consequence, disabled]) => `
+          <label class="flex items-start gap-sm p-sm rounded-lg border transition-colors
+                 ${String(value) === String(v) && !disabled
+                   ? 'border-primary bg-primary/5'
+                   : 'border-outline-variant/50'}
+                 ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:border-outline-variant'}">
+            <input type="radio" name="${f.k}" value="${v}" data-k="${f.k}" data-t="choice"
+                   ${String(value) === String(v) ? 'checked' : ''} ${disabled ? 'disabled' : ''}
+                   class="mt-1 w-4 h-4 accent-primary shrink-0">
+            <span class="min-w-0">
+              <span class="block font-body-md text-on-surface">${escapeHtml(title)}</span>
+              <span class="block text-[12px] text-on-surface-variant/70 mt-0.5 leading-relaxed">
+                ${escapeHtml(consequence)}</span>
+            </span>
+          </label>`).join('')}
+      </div>`
+      break
+
+    /* Money the schema stores in cents, edited in whole currency units. */
+    case 'cents':
+      field = `<input data-k="${f.k}" data-t="cents" type="number" min="0" step="1"
+                 value="${value === null || value === undefined ? '' : value / 100}"
+                 placeholder="${escapeHtml(f.placeholder ?? '')}"
+                 class="input-dark w-full rounded px-md py-sm font-data-mono h-12">`
+      break
+
     case 'segment':
       field = `<div class="flex flex-wrap gap-xs bg-surface-container-lowest p-1 rounded-lg border border-outline-variant">
         ${f.options.map(([v, text], i) => `
@@ -497,6 +597,15 @@ function set(key, value, isPolicy) {
     return
   }
 
+  // The dial decides which rows the block even has — the model choice and the
+  // budget cap are meaningless at Sudden Death — so it rebuilds rather than
+  // just repainting. OPENED keeps the block from snapping shut underneath it.
+  if (gameId === 'slot-bingo' && key === 'retriesPerSquare') {
+    OPENED.add('Second chances')
+    render()
+    return
+  }
+
   summarise()
 }
 
@@ -541,10 +650,16 @@ function bind() {
         el.firstElementChild.classList.toggle('translate-x-0', !next)
         set(k, next, isPolicyKey(k))
       })
-    } else if (t === 'segment') {
+    } else if (t === 'segment' || t === 'choice') {
       el.addEventListener('change', () => {
         const raw = el.value
-        set(k, /^\d+$/.test(raw) ? Number(raw) : raw, isPolicyKey(k))
+        // Endless is `null` in the config, and a segment can only carry a
+        // string — so the one option whose value is an absence says so.
+        set(k, raw === 'null' ? null : /^\d+$/.test(raw) ? Number(raw) : raw, isPolicyKey(k))
+      })
+    } else if (t === 'cents') {
+      el.addEventListener('input', () => {
+        set(k, el.value === '' ? null : Math.round(Number(el.value) * 100), isPolicyKey(k))
       })
     } else if (t === 'seconds' || t === 'minutes') {
       const div = Number(el.dataset.div)
@@ -565,6 +680,13 @@ function bind() {
                          Number(btn.dataset.min), Number(btn.dataset.max))
       input.value = next
       set(k, next, false)
+    })
+  }
+
+  for (const el of document.querySelectorAll('[data-disclosure]')) {
+    el.addEventListener('toggle', () => {
+      if (el.open) OPENED.add(el.dataset.disclosure)
+      else OPENED.delete(el.dataset.disclosure)
     })
   }
 
@@ -656,7 +778,96 @@ function bindPrizes() {
 /** Live rows by name. A declaration rather than a map, which would be in its
  *  temporal dead zone when the first render() reaches it. */
 function liveNoteFor(kind) {
-  return kind === 'unlocks' ? unlockNote() : delayNote(kind)
+  return kind === 'unlocks' ? unlockNote() : kind === 'retries' ? retriesNote() : delayNote(kind)
+}
+
+/**
+ * The retry dial, straight from the table in Slot Bingo §6.5.1.
+ *
+ * These are the spec's own published figures rather than anything computed
+ * here, because they are the numbers a streamer decides a four-hour session
+ * on. `buys` is the one derivation: the spec gives expected buys for a 5×5
+ * only (25 · ~42 · ~53 · ~55–65), and each is the board played once plus the
+ * reds played again — 25 × (1 + 0.67 + 0.67² …) truncated at the retry count.
+ * The factors below reproduce all four of its figures, so the 3×3 column is
+ * the same arithmetic rather than a guess, and `retries.test.ts` pins them
+ * against the table.
+ */
+function retryTiers() {
+  return [
+    { value: 0, name: 'Sudden Death', bingo5: 0.05, bingo3: 0.25, buyFactor: 1 },
+    { value: 1, name: 'Second Chance', bingo5: 0.45, bingo3: 0.78, buyFactor: 1.67 },
+    { value: 2, name: 'Three Lives', bingo5: 0.85, bingo3: 0.97, buyFactor: 2.12 },
+    // "A guaranteed bingo costs roughly 2.5× the bonus buys" — §6.5.1, which is
+    // also what puts a 5×5 in its stated 55–65 range.
+    { value: null, name: 'Endless', bingo5: 1, bingo3: 1, buyFactor: 2.5 },
+  ]
+}
+
+/** The dial is off Sudden Death — the same test the engine's `retriesOn` makes. */
+function retriesOn() {
+  return (cfg.retriesPerSquare === undefined ? 0 : cfg.retriesPerSquare) !== 0
+}
+
+function retryTier() {
+  const dial = cfg.retriesPerSquare === undefined ? 0 : cfg.retriesPerSquare
+  return retryTiers().find((t) => t.value === dial) ?? retryTiers()[0]
+}
+
+/** What this dial costs and buys, for the readout and the summary. */
+function bingoProjection() {
+  const size = cfg.size ?? 5
+  const tier = retryTier()
+  const buys = Math.round(size * size * tier.buyFactor)
+
+  return {
+    tier,
+    buys,
+    bingoChance: size === 3 ? tier.bingo3 : tier.bingo5,
+    spend: buys * Number(cfg.typicalBuy ?? 0),
+  }
+}
+
+/**
+ * The readout the §6.5 disclosure block is built around — "the most important
+ * thing in the block".
+ *
+ * A dial that quietly multiplies a session's cost by two and a half is a trap
+ * unless the multiplied number is on screen while the streamer turns it, so
+ * this says the odds, the buys and the money in one line, and the summary's
+ * projected spend moves in the same frame.
+ */
+function retriesNote() {
+  const { tier, buys, bingoChance, spend } = bingoProjection()
+  const currency = cfg.currency ?? 'EUR'
+  const size = cfg.size ?? 5
+
+  // §6.5, and the schema refuses the config outright: Endless has no natural
+  // end, so the ceiling is not optional.
+  if (tier.value === null && (cfg.budgetCapCents ?? null) === null) {
+    return {
+      tone: 'warn',
+      text:
+        'Endless has no natural end. Set the ceiling below, or the board sets it ' +
+        'for you at 2am — this board will not open without one.',
+    }
+  }
+
+  const percent = Math.round(bingoChance * 100)
+  const odds =
+    bingoChance >= 1
+      ? 'A line completes, guaranteed'
+      // "an 85% chance", "a 45% chance" — the figure is read aloud often enough
+      // for the wrong article to grate.
+      : `About ${/^(8|11|18)/.test(String(percent)) ? 'an' : 'a'} ${percent}% chance a line completes`
+
+  const base = size * size
+  return {
+    tone: tier.value === 0 ? 'info' : 'warn',
+    text:
+      `${odds} · roughly ${buys} bonus buys · ≈ ${money(spend, currency)}` +
+      (tier.value === 0 ? '' : ` — ${(buys / base).toFixed(1)}× the ${base}-square board.`),
+  }
 }
 
 /**
@@ -727,7 +938,7 @@ function repaintLiveNotes() {
           ['live-gate', gateNote()],
         ]
       : gameId === 'slot-bingo'
-        ? [['live-unlocks', unlockNote()]]
+        ? [['live-unlocks', unlockNote()], ['live-retries', retriesNote()]]
         : []
 
   for (const [id, next] of notes) {
@@ -748,12 +959,16 @@ function bingoSummary() {
   const size = cfg.size ?? 5
   const squares = size * size
   const lines = size * 2 + 2
-  const buy = Number(cfg.typicalBuy ?? 0)
   const currency = cfg.currency ?? 'EUR'
+  // §6.5.1 — "the projected-spend figure must recompute the instant this dial
+  // moves". Retries do not make the board bigger, they make it cost more, and
+  // this is the number that decides whether the streamer can afford it.
+  const { buys, spend, tier } = bingoProjection()
 
   return [
     ['Board', `${size} × ${size} · ${squares} squares · ${lines} lines`],
-    ['Full board costs', `≈ ${money(squares * buy, currency)}`],
+    ['Projected spend', `≈ ${money(spend, currency)}${tier.value === 0 ? '' : ` · ~${buys} buys`}`],
+    ['Second chances', tier.value === 0 ? 'Off — red is permanent' : tier.name],
     ['Green / gold', `${Number(cfg.greenThresholdX ?? 1).toFixed(2)}x / ${cfg.bigWinThresholdX ?? 50}x`],
     // §5.2 — 0 is a legitimate setting, and the summary says what it costs
     // rather than reporting "0 squares" and leaving the consequence unsaid.
@@ -1061,8 +1276,42 @@ function label(v) {
 
 // ─── submit ─────────────────────────────────────────────────────────────────
 
+/**
+ * What the form refuses rather than warns about — §6.5.
+ *
+ * "Endless has no natural end. Set the ceiling here, or the board sets it for
+ * you at 2am." The schema refuses this config too, so the session could not be
+ * created either way; refusing here means the streamer finds out while looking
+ * at the field instead of after clicking the button that was supposed to start
+ * their stream.
+ */
+function refuseSubmit() {
+  if (gameId !== 'slot-bingo') return null
+  if (retryTier().value !== null) return null
+  if ((cfg.budgetCapCents ?? null) !== null) return null
+
+  return {
+    key: 'budgetCapCents',
+    message: 'Endless has no natural end. Set a budget cap, or the board sets one for you at 2am.',
+  }
+}
+
 $('#form').addEventListener('submit', async (event) => {
   event.preventDefault()
+
+  const refusal = refuseSubmit()
+  if (refusal) {
+    OPENED.add('Second chances')
+    render()
+    const field = document.querySelector(`input[data-k="${refusal.key}"]`)
+    if (field) {
+      field.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      field.focus()
+    }
+    toast(refusal.message, 'error')
+    return
+  }
+
   const button = $('#submit')
   button.disabled = true
 
