@@ -29,9 +29,18 @@ COPY packages/catalog/package.json               packages/catalog/
 COPY packages/platform/package.json              packages/platform/
 COPY packages/games/bonus-hunt/package.json      packages/games/bonus-hunt/
 COPY packages/games/slot-tournament/package.json packages/games/slot-tournament/
+COPY packages/games/slot-bingo/package.json      packages/games/slot-bingo/
+COPY packages/games/team-battles/package.json    packages/games/team-battles/
+COPY packages/games/giveaways/package.json       packages/games/giveaways/
 COPY apps/web/package.json                       apps/web/
 COPY apps/worker/package.json                    apps/worker/
 
+# Every workspace. npm links the ones it can see, and for a while this list was
+# missing three games added after it was written — the image shipped anyway, so
+# something in a later stage was creating those links, which is a deploy resting
+# on a side effect nobody chose. The list is the thing that is supposed to be
+# true, so `image.test.ts` now keeps it in step with the workspace globs.
+#
 # NODE_ENV=production would otherwise drop the dev dependencies, and TypeScript
 # is one of them.
 RUN npm ci --include=dev
